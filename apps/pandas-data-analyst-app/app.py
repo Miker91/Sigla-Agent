@@ -103,8 +103,8 @@ llm = ChatOpenAI(model=model_option, api_key=openai_api_key)
 # ---------------------------
 
 st.markdown("""
-Upload a CSV or Excel file and ask questions about your data.  
-The AI agent will analyze your dataset and return either data tables or interactive charts.
+Wgraj plik CSV lub Excel i zadawaj pytania dotyczące danych.  
+Agent AI przeanalizuje Twój zbiór danych i zwróci albo tabele danych, albo interaktywne wykresy.
 """)
 
 uploaded_file = st.file_uploader(
