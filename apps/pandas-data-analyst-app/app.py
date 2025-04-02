@@ -8,12 +8,12 @@
 # !pip install git+https://github.com/business-science/ai-data-science-team.git --upgrade
 
 from openai import OpenAI
-
+import os
 import streamlit as st
 import pandas as pd
 import plotly.io as pio
 import json
-
+from dotenv import load_dotenv
 from langchain_community.chat_message_histories import StreamlitChatMessageHistory
 from langchain_openai import ChatOpenAI
 
@@ -23,11 +23,22 @@ from ai_data_science_team import (
     DataVisualizationAgent,
 )
 
+# Try to find .env file in multiple possible locations
+possible_paths = [
+    os.path.join(os.path.dirname(__file__), '..', '..', '.env'),  # Two directories up
+    os.path.join(os.path.dirname(__file__), '..', '.env'),        # One directory up
+    os.path.join(os.path.dirname(__file__), '.env'),              # Same directory
+    '.env'                                                         # Current working directory
+]
+
+dotenv_path = next((path for path in possible_paths if os.path.exists(path)), 
+                   os.path.join(os.path.dirname(__file__), '..', '..', '.env'))  # Default if none found
+load_dotenv(dotenv_path)
 
 # * APP INPUTS ----
 
-MODEL_LIST = ["gpt-4o-mini", "gpt-4o", "claude-3-5-sonnet-latest"]
-TITLE = "Pandas Data Analyst AI Copilot"
+MODEL_LIST = ["gpt-4o-mini", "gpt-4o", "claude-3-7-sonnet-latest"]
+TITLE = "Analityk danych Sigla"
 
 # ---------------------------
 # Streamlit App Configuration
@@ -40,19 +51,15 @@ st.set_page_config(
 st.title(TITLE)
 
 st.markdown("""
-Welcome to the Pandas Data Analyst AI. Upload a CSV or Excel file and ask questions about the data.  
-The AI agent will analyze your dataset and return either data tables or interactive charts.
+Witaj w Analityku danych Sigla. 
+Wgraj plik CSV lub Excel i zadawaj pytania dotyczące danych.  
+Agent AI przeanalizuje Twój zbiór danych i zwróci albo tabele danych, albo interaktywne wykresy.
 """)
 
 with st.expander("Example Questions", expanded=False):
     st.write(
         """
-        ##### Bikes Data Set:
-        
-        -  Show the top 5 bike models by extended sales.
-        -  Show the top 5 bike models by extended sales in a bar chart.
-        -  Show the top 5 bike models by extended sales in a pie chart.
-        -  Make a plot of extended sales by month for each bike model. Use a color to identify the bike models.
+        ##### Placeholder na przykładowe pytania
         """
     )
 
@@ -62,26 +69,25 @@ with st.expander("Example Questions", expanded=False):
 
 st.sidebar.header("Enter your OpenAI API Key")
 
-st.session_state["OPENAI_API_KEY"] = st.sidebar.text_input(
-    "API Key",
-    type="password",
-    help="Your OpenAI API key is required for the app to function.",
-)
+st.session_state["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
+
+# Get API key from environment variables
+openai_api_key = os.getenv("OPENAI_API_KEY")
 
 # Test OpenAI API Key
-if st.session_state["OPENAI_API_KEY"]:
+if openai_api_key:
     # Set the API key for OpenAI
-    client = OpenAI(api_key=st.session_state["OPENAI_API_KEY"])
+    client = OpenAI(api_key=openai_api_key)
 
-    # Test the API key (optional)
+    # Test the API key
     try:
-        # Example: Fetch models to validate the key
+        # Fetch models to validate the key
         models = client.models.list()
         st.success("API Key is valid!")
     except Exception as e:
         st.error(f"Invalid API Key: {e}")
 else:
-    st.info("Please enter your OpenAI API Key to proceed.")
+    st.error("OpenAI API Key not found in environment variables.")
     st.stop()
 
 
@@ -89,7 +95,7 @@ else:
 
 model_option = st.sidebar.selectbox("Choose OpenAI model", MODEL_LIST, index=0)
 
-llm = ChatOpenAI(model=model_option, api_key=st.session_state["OPENAI_API_KEY"])
+llm = ChatOpenAI(model=model_option, api_key=openai_api_key)
 
 
 # ---------------------------
