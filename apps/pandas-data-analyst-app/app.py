@@ -21,6 +21,7 @@ from ai_data_science_team import (
     PandasDataAnalyst,
     DataWranglingAgent,
     DataVisualizationAgent,
+    FeatureEngineeringAgent,
 )
 
 # Try to find .env file in multiple possible locations
@@ -164,6 +165,14 @@ display_chat_history()
 
 LOG = False
 
+# Instantiate FeatureEngineeringAgent
+feature_agent = FeatureEngineeringAgent(
+    model=llm,
+    log=LOG,
+    bypass_recommended_steps=True,
+    n_samples=100,
+)
+
 pandas_data_analyst = PandasDataAnalyst(
     model=llm,
     data_wrangling_agent=DataWranglingAgent(
@@ -192,10 +201,34 @@ if question := st.chat_input("Enter your question here:", key="query_input"):
         st.chat_message("human").write(question)
         msgs.add_user_message(question)
 
+        current_df = df
+
+        # --- Feature Engineering Step ---
+        try:
+            st.chat_message("ai").write("Performing feature engineering...")
+            msgs.add_ai_message("Performing feature engineering...")
+            feature_agent.invoke_agent(
+                user_instructions=question,
+                data_raw=df,
+            )
+            engineered_df = feature_agent.get_data_engineered()
+            if engineered_df is not None:
+                st.chat_message("ai").write("Feature engineering complete. Using engineered data.")
+                msgs.add_ai_message("Feature engineering complete. Using engineered data.")
+                current_df = engineered_df
+            else:
+                st.chat_message("ai").write("Feature engineering did not produce new data. Using original data.")
+                msgs.add_ai_message("Feature engineering did not produce new data. Using original data.")
+        except Exception as fe_error:
+            error_msg = f"An error occurred during feature engineering: {fe_error}. Using original data for analysis."
+            st.chat_message("ai").write(error_msg)
+            msgs.add_ai_message(error_msg)
+        # --- End Feature Engineering Step ---
+
         try:
             pandas_data_analyst.invoke_agent(
                 user_instructions=question,
-                data_raw=df,
+                data_raw=current_df,
             )
             result = pandas_data_analyst.get_response()
         except Exception as e:
