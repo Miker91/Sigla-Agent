@@ -22,6 +22,7 @@ from ai_data_science_team import (
     DataWranglingAgent,
     DataVisualizationAgent,
     FeatureEngineeringAgent,
+    DataCleaningAgent,
 )
 
 # Try to find .env file in multiple possible locations
@@ -165,6 +166,14 @@ display_chat_history()
 
 LOG = False
 
+# Instantiate DataCleaningAgent
+data_cleaning_agent = DataCleaningAgent(
+    model=llm,
+    log=LOG,
+    bypass_recommended_steps=True,
+    n_samples=100,
+)
+
 # Instantiate FeatureEngineeringAgent
 feature_agent = FeatureEngineeringAgent(
     model=llm,
@@ -203,27 +212,105 @@ if question := st.chat_input("Enter your question here:", key="query_input"):
 
         current_df = df
 
-        # --- Feature Engineering Step ---
+        # --- Workflow Analysis Step ---
+        # Use the LLM to analyze the user query and determine which data processing steps are needed
+        workflow_analysis_prompt = f"""
+        Analyze the following user query for a data analysis task and determine which steps are needed.
+        Query: "{question}"
+        
+        Determine if the query suggests a need for:
+        1. Data cleaning (e.g., handling missing values, outliers, duplicates)
+        2. Feature engineering (e.g., creating new columns, transforming data, encoding)
+        
+        Return a JSON with two boolean keys: "needs_cleaning" and "needs_feature_engineering"
+        Example: {{"needs_cleaning": true, "needs_feature_engineering": false}}
+        
+        IMPORTANT: Return ONLY the JSON object with no additional text, explanations, or Markdown formatting.
+        """
+        
         try:
-            st.chat_message("ai").write("Performing feature engineering...")
-            msgs.add_ai_message("Performing feature engineering...")
-            feature_agent.invoke_agent(
-                user_instructions=question,
-                data_raw=df,
-            )
-            engineered_df = feature_agent.get_data_engineered()
-            if engineered_df is not None:
-                st.chat_message("ai").write("Feature engineering complete. Using engineered data.")
-                msgs.add_ai_message("Feature engineering complete. Using engineered data.")
-                current_df = engineered_df
-            else:
-                st.chat_message("ai").write("Feature engineering did not produce new data. Using original data.")
-                msgs.add_ai_message("Feature engineering did not produce new data. Using original data.")
-        except Exception as fe_error:
-            error_msg = f"An error occurred during feature engineering: {fe_error}. Using original data for analysis."
-            st.chat_message("ai").write(error_msg)
-            msgs.add_ai_message(error_msg)
-        # --- End Feature Engineering Step ---
+            workflow_response = llm.invoke(workflow_analysis_prompt)
+            response_content = workflow_response.content.strip()
+            
+            # Handle potential markdown code block formatting
+            if response_content.startswith("```json"):
+                response_content = response_content.replace("```json", "", 1)
+                response_content = response_content.replace("```", "", 1)
+            elif response_content.startswith("```"):
+                response_content = response_content.replace("```", "", 1)
+                response_content = response_content.replace("```", "", 1)
+            
+            # Find JSON object if wrapped in text
+            import re
+            json_match = re.search(r'\{.*\}', response_content, re.DOTALL)
+            if json_match:
+                response_content = json_match.group(0)
+                
+            workflow_decision = json.loads(response_content.strip())
+            needs_cleaning = workflow_decision.get("needs_cleaning", False)
+            needs_feature_engineering = workflow_decision.get("needs_feature_engineering", False)
+            
+            # Log the decision to the user
+            decision_msg = f"Analysis: Your query {'requires' if needs_cleaning else 'does not require'} data cleaning and {'requires' if needs_feature_engineering else 'does not require'} feature engineering."
+            st.chat_message("ai").write(decision_msg)
+            msgs.add_ai_message(decision_msg)
+            
+        except Exception as e:
+            # If the workflow analysis fails, assume we need both steps to be safe
+            needs_cleaning = True
+            needs_feature_engineering = True
+            st.chat_message("ai").write(f"Analyzing your request... (Using default workflow due to: {str(e)})")
+            msgs.add_ai_message("Analyzing your request... (Using default workflow)")
+
+        # --- Data Cleaning Step (Conditional) ---
+        if needs_cleaning:
+            try:
+                st.chat_message("ai").write("Cleaning data...")
+                msgs.add_ai_message("Cleaning data...")
+                data_cleaning_agent.invoke_agent(
+                    user_instructions=question,
+                    data_raw=df,
+                )
+                cleaned_df = data_cleaning_agent.get_data_cleaned()
+                if cleaned_df is not None:
+                    st.chat_message("ai").write("Data cleaning complete. Using cleaned data.")
+                    msgs.add_ai_message("Data cleaning complete. Using cleaned data.")
+                    current_df = cleaned_df
+                else:
+                    st.chat_message("ai").write("Data cleaning did not produce new data. Using original data.")
+                    msgs.add_ai_message("Data cleaning did not produce new data. Using original data.")
+            except Exception as dc_error:
+                error_msg = f"An error occurred during data cleaning: {dc_error}. Using original data for analysis."
+                st.chat_message("ai").write(error_msg)
+                msgs.add_ai_message(error_msg)
+        else:
+            st.chat_message("ai").write("Skipping data cleaning as it doesn't appear necessary for your query.")
+            msgs.add_ai_message("Skipping data cleaning as it doesn't appear necessary for your query.")
+
+        # --- Feature Engineering Step (Conditional) ---
+        if needs_feature_engineering:
+            try:
+                st.chat_message("ai").write("Performing feature engineering...")
+                msgs.add_ai_message("Performing feature engineering...")
+                feature_agent.invoke_agent(
+                    user_instructions=question,
+                    data_raw=current_df,
+                )
+                engineered_df = feature_agent.get_data_engineered()
+                if engineered_df is not None:
+                    st.chat_message("ai").write("Feature engineering complete. Using engineered data.")
+                    msgs.add_ai_message("Feature engineering complete. Using engineered data.")
+                    current_df = engineered_df
+                else:
+                    st.chat_message("ai").write("Feature engineering did not produce new data. Using current data.")
+                    msgs.add_ai_message("Feature engineering did not produce new data. Using current data.")
+            except Exception as fe_error:
+                error_msg = f"An error occurred during feature engineering: {fe_error}. Using current data for analysis."
+                st.chat_message("ai").write(error_msg)
+                msgs.add_ai_message(error_msg)
+        else:
+            st.chat_message("ai").write("Skipping feature engineering as it doesn't appear necessary for your query.")
+            msgs.add_ai_message("Skipping feature engineering as it doesn't appear necessary for your query.")
 
         try:
             pandas_data_analyst.invoke_agent(
