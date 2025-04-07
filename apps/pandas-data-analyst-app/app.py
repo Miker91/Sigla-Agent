@@ -138,6 +138,20 @@ if "plots" not in st.session_state:
 if "dataframes" not in st.session_state:
     st.session_state.dataframes = []
 
+# Store data processing history to enable follow-up questions
+if "data_history" not in st.session_state:
+    st.session_state.data_history = {
+        "raw": None,
+        "cleaned": None, 
+        "engineered": None,
+        "current": None,
+        "cleaning_explanation": None,
+        "engineering_explanation": None,
+    }
+
+# Flag to track if we're processing a follow-up question
+if "is_followup" not in st.session_state:
+    st.session_state.is_followup = False
 
 def display_chat_history():
     for msg in msgs.messages:
@@ -210,7 +224,224 @@ if question := st.chat_input("Enter your question here:", key="query_input"):
         st.chat_message("human").write(question)
         msgs.add_user_message(question)
 
-        current_df = df
+        # Store original data if this is first question
+        if st.session_state.data_history["raw"] is None:
+            st.session_state.data_history["raw"] = df.copy()
+            st.session_state.data_history["current"] = df.copy()
+
+        # Check if this is a follow-up question about previous processing or data
+        followup_analysis_prompt = f"""
+        Analyze if this user query is a follow-up question about previous data processing results or asking for a targeted correction:
+        User query: "{question}"
+        
+        Determine if the query:
+        1. Is asking about why specific data was processed in a certain way (explanation request)
+        2. Is asking to correct or modify specific data elements from previous processing (correction request)
+        3. Is a new standalone question (new request)
+        
+        Return a JSON with these keys:
+        - "request_type": one of ["explanation", "correction", "new"]
+        - "focuses_on": one of ["cleaning", "engineering", "analysis", "general"] (which step it's asking about)
+        - "data_elements": list of specific data elements mentioned (column names, values, etc.)
+        
+        Example: {{"request_type": "explanation", "focuses_on": "cleaning", "data_elements": ["outliers", "price"]}}
+        
+        IMPORTANT: Return ONLY the JSON object with no additional text.
+        """
+        
+        try:
+            followup_response = llm.invoke(followup_analysis_prompt)
+            response_content = followup_response.content.strip()
+            
+            # Parse JSON response with error handling
+            import re
+            json_match = re.search(r'\{.*\}', response_content, re.DOTALL)
+            if json_match:
+                response_content = json_match.group(0)
+            
+            if response_content.startswith("```json"):
+                response_content = response_content.replace("```json", "", 1).replace("```", "", 1)
+            elif response_content.startswith("```"):
+                response_content = response_content.replace("```", "", 1).replace("```", "", 1)
+                
+            followup_decision = json.loads(response_content.strip())
+            request_type = followup_decision.get("request_type", "new")
+            focuses_on = followup_decision.get("focuses_on", "general")
+            data_elements = followup_decision.get("data_elements", [])
+            
+            # Set flag for followup processing
+            st.session_state.is_followup = request_type in ["explanation", "correction"]
+            
+        except Exception as e:
+            # Default to new question if parsing fails
+            request_type = "new"
+            focuses_on = "general"
+            data_elements = []
+            st.session_state.is_followup = False
+            
+        # Handle follow-up explanation requests
+        if request_type == "explanation":
+            if focuses_on == "cleaning" and st.session_state.data_history["cleaning_explanation"]:
+                explanation = st.session_state.data_history["cleaning_explanation"]
+                
+                # Get more specific explanation if data elements are mentioned
+                if data_elements:
+                    specific_prompt = f"""
+                    The user is asking about the cleaning process for these specific elements: {', '.join(data_elements)}
+                    
+                    Here is the full explanation of the cleaning process:
+                    {explanation}
+                    
+                    Provide a targeted explanation focusing ONLY on how those specific elements were processed.
+                    """
+                    specific_explanation = llm.invoke(specific_prompt).content
+                    st.chat_message("ai").write(specific_explanation)
+                    msgs.add_ai_message(specific_explanation)
+                else:
+                    st.chat_message("ai").write(explanation)
+                    msgs.add_ai_message(explanation)
+                
+            elif focuses_on == "engineering" and st.session_state.data_history["engineering_explanation"]:
+                explanation = st.session_state.data_history["engineering_explanation"]
+                
+                # Get more specific explanation if data elements are mentioned
+                if data_elements:
+                    specific_prompt = f"""
+                    The user is asking about the feature engineering process for these specific elements: {', '.join(data_elements)}
+                    
+                    Here is the full explanation of the engineering process:
+                    {explanation}
+                    
+                    Provide a targeted explanation focusing ONLY on how those specific elements were processed.
+                    """
+                    specific_explanation = llm.invoke(specific_prompt).content
+                    st.chat_message("ai").write(specific_explanation)
+                    msgs.add_ai_message(specific_explanation)
+                else:
+                    st.chat_message("ai").write(explanation)
+                    msgs.add_ai_message(explanation)
+            else:
+                # No relevant explanation found
+                st.chat_message("ai").write("I don't have a detailed explanation for that specific processing step.")
+                msgs.add_ai_message("I don't have a detailed explanation for that specific processing step.")
+                
+            # Skip the rest of processing for explanation requests
+            st.stop()
+            
+        # Handle follow-up correction requests
+        if request_type == "correction":
+            current_df = st.session_state.data_history["current"]
+            
+            if focuses_on == "cleaning":
+                # Go back to raw data for corrections related to cleaning
+                base_df = st.session_state.data_history["raw"]
+                correction_agent = data_cleaning_agent
+                
+                # Create targeted cleaning instructions
+                targeted_instructions = f"""
+                This is a targeted correction request. The user wants to fix specific issues with: {', '.join(data_elements)}
+                
+                Only apply cleaning operations to these specific elements. Do not modify other parts of the data.
+                
+                User's correction request: {question}
+                """
+                
+                st.chat_message("ai").write("Applying targeted cleaning correction...")
+                msgs.add_ai_message("Applying targeted cleaning correction...")
+                
+                try:
+                    correction_agent.invoke_agent(
+                        user_instructions=targeted_instructions,
+                        data_raw=base_df,
+                    )
+                    corrected_df = correction_agent.get_data_cleaned()
+                    
+                    if corrected_df is not None:
+                        # Store explanation for future reference
+                        if hasattr(correction_agent, "get_workflow_summary"):
+                            explanation = correction_agent.get_workflow_summary() or "Targeted cleaning was performed."
+                        else:
+                            explanation = "Targeted cleaning was performed based on your request."
+                        
+                        st.session_state.data_history["cleaned"] = corrected_df
+                        st.session_state.data_history["current"] = corrected_df
+                        st.session_state.data_history["cleaning_explanation"] = explanation
+                        
+                        st.chat_message("ai").write("Targeted cleaning correction applied successfully.")
+                        msgs.add_ai_message("Targeted cleaning correction applied successfully.")
+                        
+                        # Display the corrected data
+                        df_index = len(st.session_state.dataframes)
+                        st.session_state.dataframes.append(corrected_df)
+                        msgs.add_ai_message(f"DATAFRAME_INDEX:{df_index}")
+                        st.dataframe(corrected_df)
+                    else:
+                        st.chat_message("ai").write("The targeted cleaning did not result in any changes to the data.")
+                        msgs.add_ai_message("The targeted cleaning did not result in any changes to the data.")
+                except Exception as e:
+                    error_msg = f"Error applying targeted correction: {str(e)}"
+                    st.chat_message("ai").write(error_msg)
+                    msgs.add_ai_message(error_msg)
+                
+                # Skip the rest of processing for correction requests
+                st.stop()
+                
+            elif focuses_on == "engineering":
+                # Use cleaned data as base for engineering corrections if available
+                base_df = st.session_state.data_history["cleaned"] if st.session_state.data_history["cleaned"] is not None else current_df
+                correction_agent = feature_agent
+                
+                # Create targeted engineering instructions
+                targeted_instructions = f"""
+                This is a targeted correction request. The user wants to fix specific engineered features: {', '.join(data_elements)}
+                
+                Only apply feature engineering operations to these specific elements. Do not modify other parts of the data.
+                
+                User's correction request: {question}
+                """
+                
+                st.chat_message("ai").write("Applying targeted feature engineering correction...")
+                msgs.add_ai_message("Applying targeted feature engineering correction...")
+                
+                try:
+                    correction_agent.invoke_agent(
+                        user_instructions=targeted_instructions,
+                        data_raw=base_df,
+                    )
+                    corrected_df = correction_agent.get_data_engineered()
+                    
+                    if corrected_df is not None:
+                        # Store explanation for future reference
+                        if hasattr(correction_agent, "get_workflow_summary"):
+                            explanation = correction_agent.get_workflow_summary() or "Targeted feature engineering was performed."
+                        else:
+                            explanation = "Targeted feature engineering was performed based on your request."
+                        
+                        st.session_state.data_history["engineered"] = corrected_df
+                        st.session_state.data_history["current"] = corrected_df
+                        st.session_state.data_history["engineering_explanation"] = explanation
+                        
+                        st.chat_message("ai").write("Targeted feature engineering correction applied successfully.")
+                        msgs.add_ai_message("Targeted feature engineering correction applied successfully.")
+                        
+                        # Display the corrected data
+                        df_index = len(st.session_state.dataframes)
+                        st.session_state.dataframes.append(corrected_df)
+                        msgs.add_ai_message(f"DATAFRAME_INDEX:{df_index}")
+                        st.dataframe(corrected_df)
+                    else:
+                        st.chat_message("ai").write("The targeted feature engineering did not result in any changes to the data.")
+                        msgs.add_ai_message("The targeted feature engineering did not result in any changes to the data.")
+                except Exception as e:
+                    error_msg = f"Error applying targeted correction: {str(e)}"
+                    st.chat_message("ai").write(error_msg)
+                    msgs.add_ai_message(error_msg)
+                
+                # Skip the rest of processing for correction requests
+                st.stop()
+
+        # For new questions, continue with the normal processing flow
+        current_df = st.session_state.data_history["current"]
 
         # --- Workflow Analysis Step ---
         # Use the LLM to analyze the user query and determine which data processing steps are needed
@@ -269,10 +500,20 @@ if question := st.chat_input("Enter your question here:", key="query_input"):
                 msgs.add_ai_message("Cleaning data...")
                 data_cleaning_agent.invoke_agent(
                     user_instructions=question,
-                    data_raw=df,
+                    data_raw=current_df,
                 )
                 cleaned_df = data_cleaning_agent.get_data_cleaned()
                 if cleaned_df is not None:
+                    # Store explanation for future reference
+                    if hasattr(data_cleaning_agent, "get_workflow_summary"):
+                        explanation = data_cleaning_agent.get_workflow_summary() or "Data cleaning was performed."
+                    else:
+                        explanation = "Data cleaning was performed based on general best practices and your request."
+                    
+                    st.session_state.data_history["cleaned"] = cleaned_df
+                    st.session_state.data_history["current"] = cleaned_df
+                    st.session_state.data_history["cleaning_explanation"] = explanation
+                    
                     st.chat_message("ai").write("Data cleaning complete. Using cleaned data.")
                     msgs.add_ai_message("Data cleaning complete. Using cleaned data.")
                     current_df = cleaned_df
@@ -298,6 +539,16 @@ if question := st.chat_input("Enter your question here:", key="query_input"):
                 )
                 engineered_df = feature_agent.get_data_engineered()
                 if engineered_df is not None:
+                    # Store explanation for future reference
+                    if hasattr(feature_agent, "get_workflow_summary"):
+                        explanation = feature_agent.get_workflow_summary() or "Feature engineering was performed."
+                    else:
+                        explanation = "Feature engineering was performed based on your request."
+                    
+                    st.session_state.data_history["engineered"] = engineered_df
+                    st.session_state.data_history["current"] = engineered_df
+                    st.session_state.data_history["engineering_explanation"] = explanation
+                    
                     st.chat_message("ai").write("Feature engineering complete. Using engineered data.")
                     msgs.add_ai_message("Feature engineering complete. Using engineered data.")
                     current_df = engineered_df
