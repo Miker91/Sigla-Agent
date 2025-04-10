@@ -304,39 +304,39 @@ def make_configuration_analysis_agent(
             raw_text = config_data['raw_text']
             
             parse_config_prompt = PromptTemplate.from_template("""
-            You are a data analyst preparing an analysis plan based on a configuration file.
-            Please parse the following configuration text and convert it to a structured format.
+            Jesteś analitykiem danych przygotowującym plan analizy na podstawie pliku konfiguracyjnego.
+            Przeanalizuj poniższy tekst konfiguracyjny i przekształć go w ustrukturyzowany format.
             
-            Configuration text:
+            Tekst konfiguracyjny:
             ```
             {config_text}
             ```
             
-            Extract the following information:
-            1. General description of the data
-            2. For each page:
-               - Page number
-               - Title
-               - Charts to be created
-               - Description or analysis to be performed
+            Wyodrębnij następujące informacje:
+            1. Ogólny opis danych
+            2. Dla każdej strony:
+               - Numer strony
+               - Tytuł
+               - Wykresy do stworzenia
+               - Opis lub analiza do wykonania
             
-            Return a JSON object with this structure:
+            Zwróć obiekt JSON o następującej strukturze:
             ```json
             {{
-                "general_description": "Description of the data",
+                "general_description": "Opis danych",
                 "pages": [
                     {{
                         "page_number": 1,
-                        "title": "Page Title",
-                        "charts": "Chart description",
-                        "description": "Analysis description"
+                        "title": "Tytuł strony",
+                        "charts": "Opis wykresu",
+                        "description": "Opis analizy"
                     }},
                     ...
                 ]
             }}
             ```
             
-            Only return the JSON object, nothing else.
+            Zwróć tylko obiekt JSON, nic więcej.
             """)
             
             structured_config_response = llm.invoke(
@@ -385,18 +385,18 @@ def make_configuration_analysis_agent(
             
             # Generate cleaning instructions from config
             cleaning_prompt = PromptTemplate.from_template("""
-            You are a data cleaning specialist preparing data for analysis.
-            Based on the following data description and analysis requirements, 
-            provide comprehensive data cleaning instructions.
+            Jesteś specjalistą ds. czyszczenia danych przygotowującym dane do analizy.
+            Na podstawie poniższego opisu danych i wymagań analizy, 
+            podaj kompleksowe instrukcje czyszczenia danych.
             
-            Data description: {general_description}
+            Opis danych: {general_description}
             
-            Analysis requirements:
+            Wymagania analizy:
             {analysis_requirements}
             
-            Provide detailed data cleaning instructions to prepare this dataset for these analyses.
-            Focus on ensuring data quality, handling missing values, correcting data types,
-            and any transformations needed for the specified charts and analyses.
+            Przedstaw szczegółowe instrukcje czyszczenia danych w celu przygotowania tego zbioru danych do tych analiz.
+            Skup się na zapewnieniu jakości danych, obsłudze brakujących wartości, poprawie typów danych,
+            oraz wszelkich transformacjach potrzebnych do określonych wykresów i analiz.
             """)
             
             # Extract analysis requirements for all pages
@@ -446,11 +446,15 @@ def make_configuration_analysis_agent(
         
         # If all pages are processed, return results
         if current_page > state["total_pages"]:
-            return {"messages": [BaseMessage(content=json.dumps({
-                "agent": AGENT_NAME,
-                "status": "completed",
-                "total_pages_analyzed": state["total_pages"]
-            }), role="assistant")]}
+            return {"messages": [BaseMessage(
+                content=json.dumps({
+                    "agent": AGENT_NAME,
+                    "status": "completed",
+                    "total_pages_analyzed": state["total_pages"]
+                }),
+                type="ai",
+                role="assistant"
+            )]}
         
         # Get the page configuration
         pages = config_data.get("pages", [])
@@ -478,11 +482,11 @@ def make_configuration_analysis_agent(
             try:
                 # Prepare the visualization instruction
                 viz_instruction = f"""
-                Create a visualization based on the following requirements:
+                Stwórz wizualizację na podstawie następujących wymagań:
                 
-                Chart description: {charts_desc}
+                Opis wykresu: {charts_desc}
                 
-                Use the dataset provided to create this visualization.
+                Użyj dostarczonego zbioru danych do stworzenia tej wizualizacji.
                 """
                 
                 # Invoke the data visualization agent
@@ -513,26 +517,26 @@ def make_configuration_analysis_agent(
         else:
             # No visualization agent, generate code directly
             viz_prompt = PromptTemplate.from_template("""
-            You are a data visualization expert.
+            Jesteś ekspertem ds. wizualizacji danych.
             
-            Create Python code to generate a visualization based on these requirements:
+            Stwórz kod w Pythonie do wygenerowania wizualizacji na podstawie tych wymagań:
             
-            Chart description: {charts_desc}
+            Opis wykresu: {charts_desc}
             
-            Use the Plotly library to create the visualization.
-            The data is available as a pandas DataFrame called 'df' with the following structure:
+            Użyj biblioteki Plotly do stworzenia wizualizacji.
+            Dane są dostępne jako DataFrame Pandas o nazwie 'df' o następującej strukturze:
             
             {data_summary}
             
-            Return ONLY the Python code to create this visualization. The code should:
-            1. Be a single function that takes a DataFrame as input and returns a Plotly figure
-            2. Include all necessary imports inside the function
-            3. Only use the Plotly library for visualization
+            Zwróć TYLKO kod Pythona do stworzenia tej wizualizacji. Kod powinien:
+            1. Być jedną funkcją, która przyjmuje DataFrame jako dane wejściowe i zwraca figurę Plotly
+            2. Zawierać wszystkie niezbędne importy wewnątrz funkcji
+            3. Używać tylko biblioteki Plotly do wizualizacji
             
-            The function should have this signature:
+            Funkcja powinna mieć następującą sygnaturę:
             ```python
             def create_visualization(df):
-                # Your code here
+                # Twój kod tutaj
                 return fig
             ```
             """)
@@ -566,25 +570,26 @@ def make_configuration_analysis_agent(
         
         # Generate analysis description
         analysis_prompt = PromptTemplate.from_template("""
-        You are a data analyst interpreting visualization results.
+        Jesteś analitykiem danych interpretującym wyniki wizualizacji.
         
-        Based on the visualization of this data and the requirements below,
-        provide a detailed analysis and interpretation:
+        Na podstawie wizualizacji tych danych i poniższych wymagań,
+        podaj szczegółową analizę i interpretację:
         
-        Chart type: {charts_desc}
-        Analysis requirements: {analysis_desc}
+        Typ wykresu: {charts_desc}
+        Wymagania analizy: {analysis_desc}
         
-        Data summary:
+        Podsumowanie danych:
         {data_summary}
         
-        Provide a comprehensive analysis addressing the requirements above.
-        Your response should include:
-        1. Interpretation of the main trends or patterns visible in the chart
-        2. Key insights that can be derived from this visualization
-        3. Specific conclusions relevant to the analysis requirements
-        4. Any potential recommendations based on these findings
+        Przedstaw kompleksową analizę odpowiadającą powyższym wymaganiom.
+        Twoja odpowiedź powinna zawierać:
+        1. Interpretację głównych trendów lub wzorców widocznych na wykresie
+        2. Kluczowe spostrzeżenia, które można wyciągnąć z tej wizualizacji
+        3. Konkretne wnioski istotne dla wymagań analizy
+        4. Ewentualne rekomendacje na podstawie tych ustaleń
         
-        Keep your analysis factual and data-driven.
+        Utrzymuj analizę opartą na faktach i danych.
+        Odpowiedź napisz po polsku.
         """)
         
         # Get data summary if not already obtained

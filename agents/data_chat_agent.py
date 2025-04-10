@@ -240,20 +240,20 @@ def make_data_chat_agent(
         
         # Create a comprehensive data description
         data_description_prompt = PromptTemplate.from_template("""
-        You are a data analyst examining a dataset. 
-        Based on the following dataset summary, provide a comprehensive description 
-        of the data that could help in answering questions about it.
+        Jesteś analitykiem danych badającym zbiór danych. 
+        Na podstawie poniższego podsumowania zbioru danych, przedstaw kompleksowy opis 
+        danych, który mógłby pomóc w odpowiadaniu na pytania na ich temat.
         
-        Dataset summary:
+        Podsumowanie zbioru danych:
         {data_summary}
         
-        Your description should include:
-        1. What this dataset appears to contain
-        2. Key variables and their apparent meanings
-        3. Any notable patterns, distributions, or relationships
-        4. Potential insights that could be derived from this data
+        Twój opis powinien zawierać:
+        1. Co wydaje się zawierać ten zbiór danych
+        2. Kluczowe zmienne i ich znaczenie
+        3. Wszelkie zauważalne wzorce, rozkłady lub relacje
+        4. Potencjalne spostrzeżenia, które można wyciągnąć z tych danych
         
-        Provide a concise yet comprehensive summary.
+        Podaj zwięzły, ale kompleksowy opis. Napisz go po polsku.
         """)
         
         data_description_response = llm.invoke(
@@ -266,15 +266,16 @@ def make_data_chat_agent(
         analysis_insights = ""
         if state["data_analysis_results"]:
             insights_prompt = PromptTemplate.from_template("""
-            You are a data analyst summarizing previous analysis results.
-            Based on the following analysis results, provide a concise summary
-            of key insights that could be useful for answering future questions about the data.
+            Jesteś analitykiem danych podsumowującym wyniki poprzednich analiz.
+            Na podstawie poniższych wyników analiz, przedstaw zwięzłe podsumowanie
+            kluczowych wniosków, które mogą być przydatne przy odpowiadaniu na przyszłe pytania dotyczące danych.
             
-            Analysis results:
+            Wyniki analiz:
             {analysis_results}
             
-            Focus on extracting the most important findings that would be relevant
-            for future questions about this data. Organize insights by topic or category.
+            Skup się na wyodrębnieniu najważniejszych ustaleń, które byłyby istotne
+            dla przyszłych pytań o te dane. Zorganizuj wnioski według tematu lub kategorii.
+            Napisz po polsku.
             """)
             
             insights_response = llm.invoke(
@@ -314,29 +315,29 @@ def make_data_chat_agent(
         
         # Process the query
         chat_prompt = ChatPromptTemplate.from_template("""
-        You are a data analysis assistant that helps users understand and explore data.
+        Jesteś asystentem analizy danych, który pomaga użytkownikom zrozumieć i eksplorować dane.
         
-        Data Description:
+        Opis danych:
         {data_description}
         
-        Chat History:
+        Historia czatu:
         {chat_history}
         
-        Based on the data description and any analysis results provided, 
-        answer the following query in a comprehensive manner:
+        Na podstawie opisu danych i wszelkich dostarczonych wyników analiz, 
+        odpowiedz na poniższe zapytanie w wyczerpujący sposób:
 
-        User Query: {user_query}
+        Zapytanie użytkownika: {user_query}
         
-        Guidelines:
-        1. Focus on the specific question being asked
-        2. Reference specific data points when possible
-        3. If the query requires calculations or analysis not already performed, 
-           explain what would be needed
-        4. If the answer is not directly available from the data description or 
-           previous analysis, acknowledge this and suggest how the information 
-           could be obtained
+        Wytyczne:
+        1. Skup się na konkretnym zadanym pytaniu
+        2. Odwołuj się do konkretnych punktów danych, gdy to możliwe
+        3. Jeśli zapytanie wymaga obliczeń lub analiz, które nie zostały jeszcze wykonane, 
+           wyjaśnij, co byłoby potrzebne
+        4. Jeśli odpowiedź nie jest bezpośrednio dostępna z opisu danych lub 
+           poprzedniej analizy, przyznaj to i zasugeruj, jak można by uzyskać te informacje
         
-        Your response should be clear, factual, and directly addressing the user's query.
+        Twoja odpowiedź powinna być jasna, oparta na faktach i bezpośrednio odnosić się do zapytania użytkownika.
+        Odpowiedz po polsku.
         """)
         
         # Get data summary for reference
@@ -360,14 +361,15 @@ def make_data_chat_agent(
         
         # Generate potential follow-up questions
         followup_prompt = PromptTemplate.from_template("""
-        Based on the following user query and your response,
-        suggest 2-3 potential follow-up questions the user might want to ask.
+        Na podstawie poniższego zapytania użytkownika i Twojej odpowiedzi,
+        zaproponuj 2-3 potencjalne pytania uzupełniające, które użytkownik mógłby chcieć zadać.
         
-        User Query: {user_query}
-        Your Response: {response}
-        Data Description: {data_summary}
+        Zapytanie użytkownika: {user_query}
+        Twoja odpowiedź: {response}
+        Opis danych: {data_summary}
         
-        Format your suggestions as a comma-separated list.
+        Sformatuj swoje sugestie jako listę oddzieloną przecinkami.
+        Napisz pytania po polsku.
         """)
         
         followup_response = llm.invoke(
@@ -387,12 +389,16 @@ def make_data_chat_agent(
         return {
             "system_response": system_response,
             "chat_history": updated_chat_history,
-            "messages": [BaseMessage(content=json.dumps({
-                "agent": AGENT_NAME,
-                "status": "completed",
-                "query": user_query,
-                "response_length": len(chat_response.content)
-            }), role="assistant")]
+            "messages": [BaseMessage(
+                content=json.dumps({
+                    "agent": AGENT_NAME,
+                    "status": "completed",
+                    "query": user_query,
+                    "response_length": len(chat_response.content)
+                }),
+                type="ai",
+                role="assistant"
+            )]
         }
     
     # Create the data chat agent graph
