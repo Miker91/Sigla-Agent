@@ -1,5 +1,35 @@
-
 # Agent Architecture Overview
+
+# Sigla-Agent
+
+## LangSmith Observability
+
+The application now includes integration with LangSmith for enhanced observability and debugging. This helps you understand what's happening under the hood when the AI processes your data.
+
+### Features
+
+- **Detailed Tracing**: Every LLM call and data operation is logged with full context
+- **Token Usage Tracking**: Monitor cost and performance
+- **Run History**: Track all runs with their inputs and outputs
+- **Feedback Collection**: Rate results to improve the application
+- **Debugging**: See exactly what code was generated and how data was transformed
+
+### Setup
+
+1. Get a LangSmith API key from [smith.langchain.com](https://smith.langchain.com)
+2. Add it to your `.env` file:
+   ```
+   LANGSMITH_API_KEY=your_key_here
+   ```
+3. Enable tracing in the sidebar when running the application
+
+### Viewing Traces
+
+- Each run gets a unique Run ID displayed in the sidebar
+- Click on the link to view detailed trace information
+- Use the LangSmith dashboard to analyze runs, compare performance, and identify errors
+
+## Main Application Modes
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐

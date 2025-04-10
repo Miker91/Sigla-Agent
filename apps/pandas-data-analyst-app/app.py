@@ -23,6 +23,11 @@ from dotenv import load_dotenv
 from langchain_community.chat_message_histories import StreamlitChatMessageHistory
 from langchain_openai import ChatOpenAI
 
+# LangSmith imports for observability
+from langsmith import Client, traceable
+from langsmith.wrappers import wrap_openai
+import uuid
+
 # Add project root to Python path
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 if project_root not in sys.path:
@@ -53,6 +58,24 @@ possible_paths = [
 dotenv_path = next((path for path in possible_paths if os.path.exists(path)), 
                    os.path.join(os.path.dirname(__file__), '..', '..', '.env'))  # Default if none found
 load_dotenv(dotenv_path)
+
+# Setup LangSmith for observability
+os.environ["LANGSMITH_TRACING"] = "true"
+os.environ["LANGSMITH_PROJECT"] = "pandas-data-analyst"
+
+# Check if LANGSMITH_API_KEY is set, otherwise try to get from environment
+if not os.getenv("LANGSMITH_API_KEY"):
+    langsmith_api_key = os.getenv("OPENAI_API_KEY")  # Fallback to using OpenAI key
+    if langsmith_api_key:
+        os.environ["LANGSMITH_API_KEY"] = langsmith_api_key
+
+# Initialize LangSmith client
+try:
+    ls_client = Client()
+    LANGSMITH_ENABLED = True
+except Exception as e:
+    st.sidebar.warning(f"LangSmith initialization failed: {e}. Observability will be limited.")
+    LANGSMITH_ENABLED = False
 
 # * APP INPUTS ----
 
@@ -169,6 +192,10 @@ openai_api_key = os.getenv("OPENAI_API_KEY")
 if openai_api_key:
     # Set the API key for OpenAI
     client = OpenAI(api_key=openai_api_key)
+    
+    # Wrap with LangSmith for observability
+    if LANGSMITH_ENABLED:
+        client = wrap_openai(client)
 
     # Test the API key
     try:
@@ -186,7 +213,42 @@ else:
 
 model_option = st.sidebar.selectbox("Choose OpenAI model", MODEL_LIST, index=0)
 
+# Initialize the LLM with tracing
 llm = ChatOpenAI(model=model_option, api_key=openai_api_key)
+
+# Add observability UI elements to sidebar
+if LANGSMITH_ENABLED:
+    st.sidebar.subheader("LangSmith Observability")
+    
+    # Toggle tracing on/off
+    enable_tracing = st.sidebar.checkbox("Enable detailed tracing", value=True)
+    if enable_tracing:
+        os.environ["LANGSMITH_TRACING"] = "true"
+        st.sidebar.success("LangSmith tracing enabled")
+    else:
+        os.environ["LANGSMITH_TRACING"] = "false"
+        st.sidebar.warning("LangSmith tracing disabled")
+    
+    # Add expander with info
+    with st.sidebar.expander("LangSmith Tracing Info"):
+        st.write("""
+        LangSmith tracing provides detailed logs of:
+        - LLM calls and tokens usage
+        - Data transformations
+        - Agent operations and decisions
+        - Generated code and visualizations
+        
+        Each query generates a unique Run ID that can be viewed in the LangSmith UI.
+        """)
+    
+    # Show current run ID
+    run_id = st.sidebar.empty()
+    trace_link = st.sidebar.empty()
+    
+    # Add link to LangSmith dashboard
+    st.sidebar.markdown("[Open LangSmith Dashboard](https://smith.langchain.com)")
+else:
+    st.sidebar.warning("LangSmith tracing disabled")
 
 # ---------------------------
 # Application Mode Selection
@@ -614,6 +676,20 @@ def process_standard_chat(question):
         st.error("Please enter your OpenAI API Key to proceed.")
         st.stop()
 
+    # Generate a run ID for tracking
+    if LANGSMITH_ENABLED:
+        current_run_id = str(uuid.uuid4())
+        st.session_state["run_id"] = current_run_id
+        
+        # Update sidebar with run ID
+        run_id.text(f"Run ID: {current_run_id}")
+        trace_link.markdown(f"[View trace in LangSmith](https://smith.langchain.com/o/viewer/traces/{current_run_id})")
+        
+        # Log the start of query processing
+        log_action("query_started", 
+                   metadata={"question": question, "file": st.session_state.current_file_name},
+                   run_id=current_run_id)
+
     with st.spinner("Thinking..."):
         st.chat_message("human").write(question)
         msgs.add_user_message(question)
@@ -622,6 +698,12 @@ def process_standard_chat(question):
         if st.session_state.data_history["raw"] is None:
             st.session_state.data_history["raw"] = df.copy()
             st.session_state.data_history["current"] = df.copy()
+            
+            if LANGSMITH_ENABLED:
+                # Log data loaded event
+                log_action("data_loaded", 
+                           metadata={"shape": df.shape, "columns": df.columns.tolist()},
+                           run_id=current_run_id)
 
         # Check if this is a follow-up question about previous processing or data
         followup_analysis_prompt = f"""
@@ -892,6 +974,10 @@ def process_standard_chat(question):
             try:
                 st.chat_message("ai").write("Cleaning data...")
                 msgs.add_ai_message("Cleaning data...")
+                
+                if LANGSMITH_ENABLED:
+                    log_action("data_cleaning_started", run_id=current_run_id)
+                
                 data_cleaning_agent.invoke_agent(
                     user_instructions=question,
                     data_raw=current_df,
@@ -909,6 +995,16 @@ def process_standard_chat(question):
                     st.session_state.data_history["current"] = cleaned_df
                     st.session_state.data_history["cleaning_explanation"] = explanation
                     
+                    if LANGSMITH_ENABLED:
+                        # Log cleaning results
+                        log_action("data_cleaning_completed", 
+                                  metadata={
+                                      "cleaned_shape": cleaned_df.shape,
+                                      "diff_rows": current_df.shape[0] - cleaned_df.shape[0],
+                                      "explanation": explanation[:500]  # Truncate if too long
+                                  },
+                                  run_id=current_run_id)
+                    
                     st.chat_message("ai").write("Data cleaning complete. Using cleaned data.")
                     msgs.add_ai_message("Data cleaning complete. Using cleaned data.")
                     current_df = cleaned_df
@@ -919,6 +1015,11 @@ def process_standard_chat(question):
                 error_msg = f"An error occurred during data cleaning. Using original data for analysis."
                 st.chat_message("ai").write(error_msg)
                 msgs.add_ai_message(error_msg)
+                
+                if LANGSMITH_ENABLED:
+                    log_action("data_cleaning_error", 
+                              metadata={"error": str(dc_error)},
+                              run_id=current_run_id)
         else:
             st.chat_message("ai").write("Skipping data cleaning as it doesn't appear necessary for your query.")
             msgs.add_ai_message("Skipping data cleaning as it doesn't appear necessary for your query.")
@@ -928,6 +1029,10 @@ def process_standard_chat(question):
             try:
                 st.chat_message("ai").write("Performing feature engineering...")
                 msgs.add_ai_message("Performing feature engineering...")
+                
+                if LANGSMITH_ENABLED:
+                    log_action("feature_engineering_started", run_id=current_run_id)
+                
                 feature_agent.invoke_agent(
                     user_instructions=question,
                     data_raw=current_df,
@@ -944,6 +1049,17 @@ def process_standard_chat(question):
                     st.session_state.data_history["current"] = engineered_df
                     st.session_state.data_history["engineering_explanation"] = explanation
                     
+                    if LANGSMITH_ENABLED:
+                        # Log feature engineering results
+                        new_columns = set(engineered_df.columns) - set(current_df.columns)
+                        log_action("feature_engineering_completed", 
+                                  metadata={
+                                      "engineered_shape": engineered_df.shape,
+                                      "new_columns": list(new_columns),
+                                      "explanation": explanation[:500]  # Truncate if too long
+                                  },
+                                  run_id=current_run_id)
+                    
                     st.chat_message("ai").write("Feature engineering complete. Using engineered data.")
                     msgs.add_ai_message("Feature engineering complete. Using engineered data.")
                     current_df = engineered_df
@@ -954,16 +1070,34 @@ def process_standard_chat(question):
                 error_msg = f"An error occurred during feature engineering. Using current data for analysis."
                 st.chat_message("ai").write(error_msg)
                 msgs.add_ai_message(error_msg)
+                
+                if LANGSMITH_ENABLED:
+                    log_action("feature_engineering_error", 
+                              metadata={"error": str(fe_error)},
+                              run_id=current_run_id)
         else:
             st.chat_message("ai").write("Skipping feature engineering as it doesn't appear necessary for your query.")
             msgs.add_ai_message("Skipping feature engineering as it doesn't appear necessary for your query.")
 
         try:
+            if LANGSMITH_ENABLED:
+                log_action("analysis_started", run_id=current_run_id)
+                
             pandas_data_analyst.invoke_agent(
                 user_instructions=question,
                 data_raw=current_df,
             )
             result = pandas_data_analyst.get_response()
+            
+            if LANGSMITH_ENABLED:
+                # Log analysis results
+                log_action("analysis_completed", 
+                          metadata={
+                              "routing": result.get("routing_preprocessor_decision", "unknown"),
+                              "has_plot": result.get("plotly_graph") is not None,
+                              "has_table": result.get("data_wrangled") is not None
+                          },
+                          run_id=current_run_id)
         except Exception as e:
             st.chat_message("ai").write(
                 "An error occurred while processing your query. Please try again."
@@ -971,6 +1105,12 @@ def process_standard_chat(question):
             msgs.add_ai_message(
                 "An error occurred while processing your query. Please try again."
             )
+            
+            if LANGSMITH_ENABLED:
+                log_action("analysis_error", 
+                          metadata={"error": str(e)},
+                          run_id=current_run_id)
+            
             st.stop()
 
         routing = result.get("routing_preprocessor_decision")
@@ -993,9 +1133,50 @@ def process_standard_chat(question):
                 msgs.add_ai_message(f"PLOT_INDEX:{plot_index}")
                 st.chat_message("ai").write(response_text)
                 st.plotly_chart(plot_obj)
+                
+                # Add feedback collection if LangSmith is enabled
+                if LANGSMITH_ENABLED and "run_id" in st.session_state:
+                    current_run = st.session_state["run_id"]
+                    col1, col2 = st.columns([1, 8])
+                    with col1:
+                        if st.button("👍", key=f"thumbs_up_{current_run}"):
+                            try:
+                                ls_client.create_feedback(
+                                    current_run,
+                                    key="user-score",
+                                    score=1.0,
+                                    comment="User liked the result"
+                                )
+                                st.success("Feedback recorded!")
+                            except Exception as e:
+                                st.error(f"Failed to record feedback: {e}")
+                    with col2:
+                        if st.button("👎", key=f"thumbs_down_{current_run}"):
+                            try:
+                                ls_client.create_feedback(
+                                    current_run,
+                                    key="user-score",
+                                    score=0.0,
+                                    comment="User disliked the result"
+                                )
+                                st.success("Feedback recorded!")
+                            except Exception as e:
+                                st.error(f"Failed to record feedback: {e}")
+                
+                if LANGSMITH_ENABLED:
+                    # Log chart display
+                    log_action("chart_displayed", 
+                              metadata={
+                                  "plot_type": result.get("plot_type", "unknown"),
+                                  "plot_index": plot_index
+                              },
+                              run_id=current_run_id)
             else:
                 st.chat_message("ai").write("The agent did not return a valid chart.")
                 msgs.add_ai_message("The agent did not return a valid chart.")
+                
+                if LANGSMITH_ENABLED:
+                    log_action("chart_error", run_id=current_run_id)
 
         elif routing == "table":
             # Process table result
@@ -1011,9 +1192,22 @@ def process_standard_chat(question):
                 msgs.add_ai_message(f"DATAFRAME_INDEX:{df_index}")
                 st.chat_message("ai").write(response_text)
                 st.dataframe(data_wrangled)
+                
+                if LANGSMITH_ENABLED:
+                    # Log table display
+                    log_action("table_displayed", 
+                              metadata={
+                                  "table_shape": data_wrangled.shape,
+                                  "table_index": df_index,
+                                  "columns": data_wrangled.columns.tolist()[:20]  # First 20 columns
+                              },
+                              run_id=current_run_id)
             else:
                 st.chat_message("ai").write("No table data was returned by the agent.")
                 msgs.add_ai_message("No table data was returned by the agent.")
+                
+                if LANGSMITH_ENABLED:
+                    log_action("table_error", run_id=current_run_id)
         else:
             # Fallback if routing decision is unclear or if chart error occurred
             data_wrangled = result.get("data_wrangled")
@@ -1030,12 +1224,24 @@ def process_standard_chat(question):
                 msgs.add_ai_message(f"DATAFRAME_INDEX:{df_index}")
                 st.chat_message("ai").write(response_text)
                 st.dataframe(data_wrangled)
+                
+                if LANGSMITH_ENABLED:
+                    log_action("fallback_table_displayed", 
+                              metadata={"table_index": df_index},
+                              run_id=current_run_id)
             else:
                 response_text = (
                     "An error occurred while processing your query. Please try again."
                 )
                 msgs.add_ai_message(response_text)
                 st.chat_message("ai").write(response_text)
+                
+                if LANGSMITH_ENABLED:
+                    log_action("response_error", run_id=current_run_id)
+                    
+        # Log completion of query processing
+        if LANGSMITH_ENABLED:
+            log_action("query_completed", run_id=current_run_id)
 
 # ---------------------------
 # Main Application Logic Based on Selected Mode
@@ -1075,3 +1281,53 @@ elif app_mode == "Analiza z pliku konfiguracyjnego":
 elif app_mode == "Czatowanie z danymi":
     # Display chat with data interface
     display_chat_with_data()
+
+# ---------------------------
+# Utility Functions
+# ---------------------------
+
+def log_action(action, metadata=None, run_id=None):
+    """Log an action to LangSmith for observability"""
+    if not LANGSMITH_ENABLED:
+        return None
+    
+    if run_id is None:
+        run_id = str(uuid.uuid4())
+    
+    if metadata is None:
+        metadata = {}
+    
+    # Add common metadata
+    metadata.update({
+        "action": action,
+        "app_mode": app_mode,
+        "model": model_option,
+        "timestamp": str(datetime.now())
+    })
+    
+    try:
+        # Create run in LangSmith (can be used for standalone events)
+        ls_client.create_run(
+            name=f"User Action: {action}",
+            run_type="llm",
+            inputs={"action": action},
+            outputs={"status": "completed"},
+            runtime={"model": model_option},
+            extra={
+                "metadata": metadata
+            },
+            trace_id=run_id,
+            run_id=run_id
+        )
+        
+        # Update UI with run ID
+        if "run_id" in st.session_state:
+            run_id = st.sidebar.empty()
+            run_id.text(f"Run ID: {run_id}")
+            trace_link = st.sidebar.empty()
+            trace_link.markdown(f"[View trace in LangSmith](https://smith.langchain.com/o/viewer/traces/{run_id})")
+        
+        return run_id
+    except Exception as e:
+        print(f"Failed to log action to LangSmith: {e}")
+        return None
