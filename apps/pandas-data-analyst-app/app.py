@@ -52,16 +52,11 @@ st.set_page_config(
 )
 st.title(TITLE)
 
-st.markdown("""
-Witaj w Analityku danych Sigla. 
-Wgraj plik CSV lub Excel i zadawaj pytania dotyczące danych.  
-Agent AI przeanalizuje Twój zbiór danych i zwróci albo tabele danych, albo interaktywne wykresy.
-""")
 
 with st.expander("Example Questions", expanded=False):
     st.write(
         """
-        ##### Placeholder na przykładowe pytania
+        # calculate the 7-day rolling average of 'quantity_sold' for each bike model. Then create appropiate chart presenting the data
         """
     )
 
@@ -105,8 +100,7 @@ llm = ChatOpenAI(model=model_option, api_key=openai_api_key)
 # ---------------------------
 
 st.markdown("""
-Wgraj plik CSV lub Excel i zadawaj pytania dotyczące danych.  
-Agent AI przeanalizuje Twój zbiór danych i zwróci albo tabele danych, albo interaktywne wykresy.
+Wgraj plik CSV i zadawaj pytania dotyczące danych.  
 """)
 
 uploaded_file = st.file_uploader(
