@@ -39,7 +39,7 @@ load_dotenv(dotenv_path)
 
 # * APP INPUTS ----
 
-MODEL_LIST = ["gpt-4o-mini", "gpt-4o", "claude-3-7-sonnet-latest"]
+MODEL_LIST = ["gpt-4o-mini", "gpt-4o"]
 TITLE = "Analityk danych Sigla"
 
 # ---------------------------
