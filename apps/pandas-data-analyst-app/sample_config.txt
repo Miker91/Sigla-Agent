@@ -1,0 +1,24 @@
+Ogólny opis danych:
+- Zbiór danych zawiera informacje o sprzedaży rowerów.
+- Dostępne kolumny: { df.columns.tolist() }
+
+Analiza danych:
+Page 1:
+    - Title: "Raport z analizy danych - Rozkład cen"
+    - Charts: "Histogram z rozkładu cen rowerów"
+    - Description: "Przeprowadź analizę rozkładu cen rowerów. Wyciągnij wnioski dotyczące średnich cen, mediany, zakresu oraz ewentualnych anomalii."
+
+Page 2:
+    - Title: "Raport z analizy danych - Trendy sprzedaży"
+    - Charts: "7-dniowa średnia krocząca kolumny 'quantity_sold' dla każdego modelu roweru"
+    - Description: "Zbadaj trend sprzedaży w czasie dla poszczególnych modeli rowerów. Zidentyfikuj modele o najwyższej sprzedaży i okresy zwiększonej aktywności."
+
+Page 3:
+    - Title: "Raport z analizy danych - Zmiany cen"
+    - Charts: "Wykres liniowy zmian cen rowerów w czasie"
+    - Description: "Przeanalizuj zmiany cen rowerów w czasie. Określ, czy występują sezonowe wahania cen oraz zidentyfikuj długoterminowe trendy."
+
+Page 4:
+    - Title: "Raport z analizy danych - Wpływ koloru na sprzedaż"
+    - Charts: "Wykres słupkowy przedstawiający rozkład sprzedaży rowerów w zależności od koloru"
+    - Description: "Zbadaj wpływ koloru roweru na poziom sprzedaży. Określ, które kolory są najpopularniejsze wśród klientów i czy istnieje korelacja między kolorem a ceną." 

@@ -4,3 +4,7 @@ from ai_data_science_team.agents.data_wrangling_agent import make_data_wrangling
 from ai_data_science_team.agents.sql_database_agent import make_sql_database_agent, SQLDatabaseAgent
 from ai_data_science_team.agents.data_visualization_agent import make_data_visualization_agent, DataVisualizationAgent
 from ai_data_science_team.agents.data_loader_tools_agent import make_data_loader_tools_agent, DataLoaderToolsAgent
+
+# Import our custom agents with relative imports
+from .configuration_analysis_agent import make_configuration_analysis_agent, ConfigurationAnalysisAgent
+from .data_chat_agent import make_data_chat_agent, DataChatAgent

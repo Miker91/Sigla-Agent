@@ -9,13 +9,24 @@
 
 from openai import OpenAI
 import os
+import sys
 import streamlit as st
 import pandas as pd
 import plotly.io as pio
 import json
+import yaml
+import io
+import tempfile
+from datetime import datetime
+import numpy as np
 from dotenv import load_dotenv
 from langchain_community.chat_message_histories import StreamlitChatMessageHistory
 from langchain_openai import ChatOpenAI
+
+# Add project root to Python path
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+if project_root not in sys.path:
+    sys.path.append(project_root)
 
 from ai_data_science_team import (
     PandasDataAnalyst,
@@ -23,6 +34,12 @@ from ai_data_science_team import (
     DataVisualizationAgent,
     FeatureEngineeringAgent,
     DataCleaningAgent,
+)
+
+# Import custom agents
+from agents import (
+    ConfigurationAnalysisAgent,
+    DataChatAgent,
 )
 
 # Try to find .env file in multiple possible locations
@@ -42,6 +59,91 @@ load_dotenv(dotenv_path)
 MODEL_LIST = ["gpt-4o-mini", "gpt-4o"]
 TITLE = "Analityk danych Sigla"
 
+# Application modes
+APP_MODES = ["Analiza danych z czatem", "Analiza z pliku konfiguracyjnego", "Czatowanie z danymi"]
+
+# Sample data generator
+def create_sample_bike_sales_data():
+    """Generate sample bike sales data for demonstration purposes."""
+    np.random.seed(42)
+    
+    # Define parameters
+    n_rows = 500
+    start_date = pd.to_datetime('2023-01-01')
+    end_date = pd.to_datetime('2023-12-31')
+    
+    # Generate dates
+    dates = pd.date_range(start=start_date, end=end_date, freq='D')
+    selected_dates = np.random.choice(dates, size=n_rows, replace=True)
+    selected_dates = sorted(selected_dates)
+    
+    # Bike models
+    models = ['Mountain Pro', 'City Cruiser', 'Road Elite', 'Explorer', 'Kids Fun']
+    
+    # Bike colors
+    colors = ['Red', 'Blue', 'Green', 'Black', 'White', 'Yellow', 'Silver']
+    
+    # Categories
+    categories = ['Budget', 'Standard', 'Premium']
+    
+    # Generate data
+    data = {
+        'date': selected_dates,
+        'model': np.random.choice(models, size=n_rows),
+        'color': np.random.choice(colors, size=n_rows),
+        'category': np.random.choice(categories, size=n_rows, p=[0.2, 0.5, 0.3]),
+    }
+    
+    # Generate prices based on category
+    price_base = {
+        'Budget': 300,
+        'Standard': 800,
+        'Premium': 1500,
+    }
+    
+    prices = []
+    for cat in data['category']:
+        base = price_base[cat]
+        variation = np.random.normal(0, base * 0.1)  # 10% standard deviation
+        price = max(base + variation, base * 0.7)  # Ensure no negative prices
+        prices.append(round(price, 2))
+    
+    data['price'] = prices
+    
+    # Generate quantity sold with seasonal patterns
+    quantity = []
+    for date in selected_dates:
+        # Higher sales in summer months (June-August)
+        month = date.month
+        if 6 <= month <= 8:
+            base_quantity = np.random.poisson(5)
+        else:
+            base_quantity = np.random.poisson(3)
+        
+        # Weekend boost
+        if date.dayofweek >= 5:  # Saturday or Sunday
+            base_quantity += np.random.poisson(2)
+            
+        quantity.append(max(1, base_quantity))  # At least 1 sold
+    
+    data['quantity_sold'] = quantity
+    
+    # Calculate revenue
+    data['revenue'] = [p * q for p, q in zip(data['price'], data['quantity_sold'])]
+    
+    # Create DataFrame
+    df = pd.DataFrame(data)
+    
+    # Add some special discount events
+    special_dates = ['2023-07-04', '2023-11-24', '2023-12-26']
+    for special_date in special_dates:
+        idx = df[df['date'] == pd.to_datetime(special_date)].index
+        df.loc[idx, 'price'] = df.loc[idx, 'price'] * 0.8
+        df.loc[idx, 'quantity_sold'] = df.loc[idx, 'quantity_sold'] * 2
+        df.loc[idx, 'revenue'] = df.loc[idx, 'price'] * df.loc[idx, 'quantity_sold']
+    
+    return df
+
 # ---------------------------
 # Streamlit App Configuration
 # ---------------------------
@@ -51,14 +153,6 @@ st.set_page_config(
     page_icon="📊",
 )
 st.title(TITLE)
-
-
-with st.expander("Example Questions", expanded=False):
-    st.write(
-        """
-        # calculate the 7-day rolling average of 'quantity_sold' for each bike model. Then create appropiate chart presenting the data
-        """
-    )
 
 # ---------------------------
 # OpenAI API Key Entry and Test
@@ -94,37 +188,47 @@ model_option = st.sidebar.selectbox("Choose OpenAI model", MODEL_LIST, index=0)
 
 llm = ChatOpenAI(model=model_option, api_key=openai_api_key)
 
+# ---------------------------
+# Application Mode Selection
+# ---------------------------
+
+app_mode = st.sidebar.selectbox("Wybierz tryb aplikacji", APP_MODES)
 
 # ---------------------------
 # File Upload and Data Preview
 # ---------------------------
 
 st.markdown("""
-Wgraj plik CSV i zadawaj pytania dotyczące danych.  
+Wgraj plik CSV lub Excel z danymi do analizy lub użyj przykładowych danych.  
 """)
 
-uploaded_file = st.file_uploader(
-    "Choose a CSV or Excel file", type=["csv", "xlsx", "xls"]
-)
-if uploaded_file is not None:
-    if uploaded_file.name.endswith(".csv"):
-        df = pd.read_csv(uploaded_file)
-    else:
-        df = pd.read_excel(uploaded_file)
+use_sample_data = st.checkbox("Użyj przykładowych danych o sprzedaży rowerów", value=False)
 
+if use_sample_data:
+    df = create_sample_bike_sales_data()
+    st.success("Załadowano przykładowe dane o sprzedaży rowerów.")
+    
     st.subheader("Data Preview")
     st.dataframe(df.head())
 else:
-    st.info("Please upload a CSV or Excel file to get started.")
-    st.stop()
+    uploaded_file = st.file_uploader(
+        "Choose a CSV or Excel file", type=["csv", "xlsx", "xls"]
+    )
+    if uploaded_file is not None:
+        if uploaded_file.name.endswith(".csv"):
+            df = pd.read_csv(uploaded_file)
+        else:
+            df = pd.read_excel(uploaded_file)
+
+        st.subheader("Data Preview")
+        st.dataframe(df.head())
+    else:
+        st.info("Please upload a CSV or Excel file or use the sample data option to get started.")
+        st.stop()
 
 # ---------------------------
-# Initialize Chat Message History and Storage
+# Initialize Storage for Session State
 # ---------------------------
-
-msgs = StreamlitChatMessageHistory(key="langchain_messages")
-if len(msgs.messages) == 0:
-    msgs.add_ai_message("How can I help you?")
 
 if "plots" not in st.session_state:
     st.session_state.plots = []
@@ -143,30 +247,21 @@ if "data_history" not in st.session_state:
         "engineering_explanation": None,
     }
 
+# Store configuration analysis results
+if "config_analysis_results" not in st.session_state:
+    st.session_state.config_analysis_results = None
+
 # Flag to track if we're processing a follow-up question
 if "is_followup" not in st.session_state:
     st.session_state.is_followup = False
 
-def display_chat_history():
-    for msg in msgs.messages:
-        with st.chat_message(msg.type):
-            if "PLOT_INDEX:" in msg.content:
-                plot_index = int(msg.content.split("PLOT_INDEX:")[1])
-                st.plotly_chart(
-                    st.session_state.plots[plot_index], key=f"history_plot_{plot_index}"
-                )
-            elif "DATAFRAME_INDEX:" in msg.content:
-                df_index = int(msg.content.split("DATAFRAME_INDEX:")[1])
-                st.dataframe(
-                    st.session_state.dataframes[df_index],
-                    key=f"history_dataframe_{df_index}",
-                )
-            else:
-                st.write(msg.content)
+# Flag to track if configuration analysis has been performed
+if "config_analyzed" not in st.session_state:
+    st.session_state.config_analyzed = False
 
-
-# Render current messages from StreamlitChatMessageHistory
-display_chat_history()
+# Store chat history for data chat
+if "data_chat_history" not in st.session_state:
+    st.session_state.data_chat_history = []
 
 # ---------------------------
 # AI Agent Setup
@@ -190,6 +285,14 @@ feature_agent = FeatureEngineeringAgent(
     n_samples=100,
 )
 
+# Instantiate DataVisualizationAgent
+data_visualization_agent = DataVisualizationAgent(
+    model=llm,
+    n_samples=100,
+    log=LOG,
+)
+
+# Instantiate PandasDataAnalyst
 pandas_data_analyst = PandasDataAnalyst(
     model=llm,
     data_wrangling_agent=DataWranglingAgent(
@@ -198,18 +301,267 @@ pandas_data_analyst = PandasDataAnalyst(
         bypass_recommended_steps=True,
         n_samples=100,
     ),
-    data_visualization_agent=DataVisualizationAgent(
-        model=llm,
-        n_samples=100,
-        log=LOG,
-    ),
+    data_visualization_agent=data_visualization_agent,
+)
+
+# Instantiate ConfigurationAnalysisAgent
+config_analysis_agent = ConfigurationAnalysisAgent(
+    model=llm,
+    data_cleaning_agent=data_cleaning_agent,
+    data_visualization_agent=data_visualization_agent,
+    n_samples=100,
+    log=LOG,
+)
+
+# Instantiate DataChatAgent
+data_chat_agent = DataChatAgent(
+    model=llm,
+    n_samples=100,
+    log=LOG,
 )
 
 # ---------------------------
-# Chat Input and Agent Invocation
+# Chat with Data Mode Functions
 # ---------------------------
 
-if question := st.chat_input("Enter your question here:", key="query_input"):
+def display_chat_with_data():
+    """Display the chat interface for interacting with data."""
+    st.subheader("Chat with your Data")
+    
+    # Initialize chat history from session state if available
+    chat_history = st.session_state.data_chat_history
+    
+    # Display chat history
+    for msg in chat_history:
+        with st.chat_message("human" if "user" in msg else "assistant"):
+            if "user" in msg:
+                st.write(msg["user"])
+            else:
+                st.write(msg["assistant"]["answer"])
+                
+                # Display follow-up suggestions if available
+                if "suggested_followups" in msg["assistant"]:
+                    followups = msg["assistant"]["suggested_followups"]
+                    if followups and isinstance(followups, list) and len(followups) > 0:
+                        with st.expander("Suggested follow-up questions"):
+                            for q in followups:
+                                st.markdown(f"- {q.strip()}")
+    
+    # Chat input
+    if user_query := st.chat_input("Ask a question about your data:"):
+        # Display user message
+        with st.chat_message("human"):
+            st.write(user_query)
+        
+        # Store the original data if this is first question
+        if st.session_state.data_history["raw"] is None:
+            st.session_state.data_history["raw"] = df.copy()
+            st.session_state.data_history["current"] = df.copy()
+        
+        # Process the query with a spinner
+        with st.spinner("Analyzing your question..."):
+            # Get current data state
+            current_data = st.session_state.data_history["current"]
+            
+            # Get analysis results if available
+            analysis_results = st.session_state.config_analysis_results if st.session_state.config_analyzed else {}
+            
+            # Invoke the data chat agent
+            data_chat_agent.invoke_agent(
+                data_raw=df,
+                data_cleaned=current_data,
+                analysis_results=analysis_results,
+                user_query=user_query
+            )
+            
+            # Get the response
+            response = data_chat_agent.get_response()
+            
+            # Update chat history in session state
+            chat_entry = {
+                "user": user_query,
+                "assistant": response
+            }
+            st.session_state.data_chat_history.append(chat_entry)
+            
+            # Display the response
+            with st.chat_message("assistant"):
+                st.write(response["answer"])
+                
+                # Display follow-up suggestions
+                if "suggested_followups" in response:
+                    followups = response["suggested_followups"]
+                    if followups and isinstance(followups, list) and len(followups) > 0:
+                        with st.expander("Suggested follow-up questions"):
+                            for q in followups:
+                                st.markdown(f"- {q.strip()}")
+
+# ---------------------------
+# Configuration Analysis Mode Functions
+# ---------------------------
+
+def display_config_analysis():
+    """Display the configuration-based analysis interface."""
+    st.subheader("Analyze Data with Configuration File")
+    
+    # Add option to download sample configuration
+    sample_config_path = os.path.join(os.path.dirname(__file__), "sample_config.txt")
+    if os.path.exists(sample_config_path):
+        with open(sample_config_path, 'r') as f:
+            sample_config = f.read()
+        
+        col1, col2 = st.columns([3, 1])
+        with col2:
+            st.download_button(
+                label="Download Sample Config",
+                data=sample_config,
+                file_name="sample_config.txt",
+                mime="text/plain"
+            )
+        with col1:
+            st.info("You can download a sample configuration file to use as a template.")
+    
+    # Allow user to enter or upload a configuration file
+    config_option = st.radio(
+        "Choose configuration source",
+        ["Enter configuration text", "Upload configuration file", "Use sample configuration"]
+    )
+    
+    config_content = None
+    config_file_path = None
+    
+    if config_option == "Enter configuration text":
+        config_text = st.text_area(
+            "Enter configuration text:",
+            height=300,
+            placeholder="""Ogólny opis danych:
+- Zbiór danych zawiera informacje o sprzedaży rowerów.
+- Dostępne kolumny: { df.columns.tolist() }
+Analiza danych:
+Page 1:
+    - Title: "Raport z analizy danych"
+    - Charts: "Histogram z rozkładu cen rowerów"
+    - Description: "Opis rozkładu cen rowerów. Wyciąganie wniosków dotyczących rozkładu cen rowerów."
+..."""
+        )
+        if config_text:
+            # Write to a temporary file
+            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as temp_file:
+                temp_file.write(config_text)
+                config_file_path = temp_file.name
+    elif config_option == "Upload configuration file":
+        config_file = st.file_uploader(
+            "Upload configuration file (YAML, JSON, or TXT)",
+            type=["yaml", "yml", "json", "txt"],
+            key="config_upload"
+        )
+        if config_file:
+            # Write to a temporary file
+            file_extension = config_file.name.split('.')[-1].lower()
+            with tempfile.NamedTemporaryFile(mode='wb', delete=False, suffix=f'.{file_extension}') as temp_file:
+                temp_file.write(config_file.getvalue())
+                config_file_path = temp_file.name
+    else:  # Use sample configuration
+        # Load the sample configuration
+        if os.path.exists(sample_config_path):
+            st.code(sample_config, language="yaml")
+            st.info("This sample configuration will be used to analyze the data.")
+            
+            # Write to a temporary file
+            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as temp_file:
+                temp_file.write(sample_config)
+                config_file_path = temp_file.name
+        else:
+            st.error("Sample configuration file not found. Please choose another option.")
+    
+    # Run analysis button
+    if config_file_path and st.button("Run Analysis"):
+        with st.spinner("Running configuration-based analysis..."):
+            # Store the original data if this is first question
+            if st.session_state.data_history["raw"] is None:
+                st.session_state.data_history["raw"] = df.copy()
+                st.session_state.data_history["current"] = df.copy()
+            
+            # Run the configuration analysis
+            config_analysis_agent.invoke_agent(
+                data_raw=df,
+                config_file_path=config_file_path
+            )
+            
+            # Store results in session state
+            st.session_state.config_analysis_results = config_analysis_agent.get_analysis_results()
+            st.session_state.config_analyzed = True
+            
+            # Get cleaned data if it exists
+            cleaned_data = config_analysis_agent.get_data_cleaned()
+            if cleaned_data is not None:
+                st.session_state.data_history["cleaned"] = cleaned_data
+                st.session_state.data_history["current"] = cleaned_data
+            
+            # Display success message
+            st.success("Analysis completed successfully!")
+    
+    # Display results if analysis has been run
+    if st.session_state.config_analyzed and st.session_state.config_analysis_results:
+        st.subheader("Analysis Results")
+        
+        # Get total pages
+        total_pages = config_analysis_agent.get_total_pages()
+        
+        # Create tabs for each page
+        if total_pages > 0:
+            tabs = st.tabs([f"Page {i+1}" for i in range(total_pages)])
+            
+            for i, tab in enumerate(tabs):
+                with tab:
+                    page_key = f"Page {i+1}"
+                    if page_key in st.session_state.config_analysis_results:
+                        page_results = st.session_state.config_analysis_results[page_key]
+                        
+                        # Display title
+                        st.markdown(f"## {page_results.get('title', f'Analysis Page {i+1}')}")
+                        
+                        # Display chart description
+                        st.markdown(f"**Chart Description:** {page_results.get('charts_description', '')}")
+                        
+                        # Display visualization if available
+                        visualizations = config_analysis_agent.get_visualizations()
+                        if page_key in visualizations:
+                            st.plotly_chart(visualizations[page_key])
+                        else:
+                            # If no visualization available, show the visualization code
+                            with st.expander("View visualization code"):
+                                st.code(page_results.get('visualization_code', ''), language="python")
+                        
+                        # Display analysis
+                        st.markdown("### Analysis")
+                        st.markdown(page_results.get('analysis_description', ''))
+        else:
+            st.warning("No analysis pages were found in the configuration.")
+
+# ---------------------------
+# Standard Chat Interface for Data Analysis
+# ---------------------------
+
+def display_chat_history():
+    for msg in msgs.messages:
+        with st.chat_message(msg.type):
+            if "PLOT_INDEX:" in msg.content:
+                plot_index = int(msg.content.split("PLOT_INDEX:")[1])
+                st.plotly_chart(
+                    st.session_state.plots[plot_index], key=f"history_plot_{plot_index}"
+                )
+            elif "DATAFRAME_INDEX:" in msg.content:
+                df_index = int(msg.content.split("DATAFRAME_INDEX:")[1])
+                st.dataframe(
+                    st.session_state.dataframes[df_index],
+                    key=f"history_dataframe_{df_index}",
+                )
+            else:
+                st.write(msg.content)
+
+def process_standard_chat(question):
+    """Process a query in the standard data analysis chat mode."""
     if not st.session_state["OPENAI_API_KEY"]:
         st.error("Please enter your OpenAI API Key to proceed.")
         st.stop()
@@ -484,7 +836,7 @@ if question := st.chat_input("Enter your question here:", key="query_input"):
             # If the workflow analysis fails, assume we need both steps to be safe
             needs_cleaning = True
             needs_feature_engineering = True
-            st.chat_message("ai").write(f"Analyzing your request... (Using default workflow due to: {str(e)})")
+            st.chat_message("ai").write(f"Analyzing your request... (Using default workflow)")
             msgs.add_ai_message("Analyzing your request... (Using default workflow)")
 
         # --- Data Cleaning Step (Conditional) ---
@@ -497,6 +849,7 @@ if question := st.chat_input("Enter your question here:", key="query_input"):
                     data_raw=current_df,
                 )
                 cleaned_df = data_cleaning_agent.get_data_cleaned()
+                
                 if cleaned_df is not None:
                     # Store explanation for future reference
                     if hasattr(data_cleaning_agent, "get_workflow_summary"):
@@ -515,7 +868,7 @@ if question := st.chat_input("Enter your question here:", key="query_input"):
                     st.chat_message("ai").write("Data cleaning did not produce new data. Using original data.")
                     msgs.add_ai_message("Data cleaning did not produce new data. Using original data.")
             except Exception as dc_error:
-                error_msg = f"An error occurred during data cleaning: {dc_error}. Using original data for analysis."
+                error_msg = f"An error occurred during data cleaning. Using original data for analysis."
                 st.chat_message("ai").write(error_msg)
                 msgs.add_ai_message(error_msg)
         else:
@@ -550,7 +903,7 @@ if question := st.chat_input("Enter your question here:", key="query_input"):
                     st.chat_message("ai").write("Feature engineering did not produce new data. Using current data.")
                     msgs.add_ai_message("Feature engineering did not produce new data. Using current data.")
             except Exception as fe_error:
-                error_msg = f"An error occurred during feature engineering: {fe_error}. Using current data for analysis."
+                error_msg = f"An error occurred during feature engineering. Using current data for analysis."
                 st.chat_message("ai").write(error_msg)
                 msgs.add_ai_message(error_msg)
         else:
@@ -635,3 +988,36 @@ if question := st.chat_input("Enter your question here:", key="query_input"):
                 )
                 msgs.add_ai_message(response_text)
                 st.chat_message("ai").write(response_text)
+
+# ---------------------------
+# Main Application Logic Based on Selected Mode
+# ---------------------------
+
+if app_mode == "Analiza danych z czatem":
+    # Display example questions
+    with st.expander("Example Questions", expanded=False):
+        st.write(
+            """
+            Calculate the 7-day rolling average of 'quantity_sold' for each bike model. Then create appropiate chart presenting the data
+            """
+        )
+    
+    # Initialize chat history
+    msgs = StreamlitChatMessageHistory(key="langchain_messages")
+    if len(msgs.messages) == 0:
+        msgs.add_ai_message("How can I help you?")
+    
+    # Render current messages from StreamlitChatMessageHistory
+    display_chat_history()
+    
+    # Chat input for standard data analysis mode
+    if question := st.chat_input("Enter your question here:", key="query_input"):
+        process_standard_chat(question)
+
+elif app_mode == "Analiza z pliku konfiguracyjnego":
+    # Display configuration-based analysis interface
+    display_config_analysis()
+
+elif app_mode == "Czatowanie z danymi":
+    # Display chat with data interface
+    display_chat_with_data()
