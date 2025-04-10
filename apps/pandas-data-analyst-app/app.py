@@ -202,10 +202,35 @@ st.markdown("""
 Wgraj plik CSV lub Excel z danymi do analizy lub użyj przykładowych danych.  
 """)
 
+# Add file tracking to detect changes
+if "current_file_name" not in st.session_state:
+    st.session_state.current_file_name = None
+
 use_sample_data = st.checkbox("Użyj przykładowych danych o sprzedaży rowerów", value=False)
 
 if use_sample_data:
     df = create_sample_bike_sales_data()
+    
+    # Check if data source has changed
+    if st.session_state.current_file_name != "sample_data":
+        # Reset session state for new data
+        st.session_state.data_history = {
+            "raw": None,
+            "cleaned": None, 
+            "engineered": None,
+            "current": None,
+            "cleaning_explanation": None,
+            "engineering_explanation": None,
+        }
+        st.session_state.config_analysis_results = None
+        st.session_state.config_analyzed = False
+        st.session_state.data_chat_history = []
+        st.session_state.plots = []
+        st.session_state.dataframes = []
+        if "langchain_messages" in st.session_state:
+            st.session_state.langchain_messages = []
+        st.session_state.current_file_name = "sample_data"
+    
     st.success("Załadowano przykładowe dane o sprzedaży rowerów.")
     
     st.subheader("Data Preview")
@@ -215,6 +240,29 @@ else:
         "Choose a CSV or Excel file", type=["csv", "xlsx", "xls"]
     )
     if uploaded_file is not None:
+        # Check if a new file has been uploaded
+        if st.session_state.current_file_name != uploaded_file.name:
+            # Reset session state for new data
+            st.session_state.data_history = {
+                "raw": None,
+                "cleaned": None, 
+                "engineered": None,
+                "current": None,
+                "cleaning_explanation": None,
+                "engineering_explanation": None,
+            }
+            st.session_state.config_analysis_results = None
+            st.session_state.config_analyzed = False
+            st.session_state.data_chat_history = []
+            st.session_state.plots = []
+            st.session_state.dataframes = []
+            if "langchain_messages" in st.session_state:
+                st.session_state.langchain_messages = []
+            # Ensure we reset any other relevant session state variables
+            if "is_followup" in st.session_state:
+                st.session_state.is_followup = False
+            st.session_state.current_file_name = uploaded_file.name
+        
         if uploaded_file.name.endswith(".csv"):
             df = pd.read_csv(uploaded_file)
         else:
@@ -1004,8 +1052,14 @@ if app_mode == "Analiza danych z czatem":
     
     # Initialize chat history
     msgs = StreamlitChatMessageHistory(key="langchain_messages")
-    if len(msgs.messages) == 0:
+    
+    # Clear messages if they are from a previous file/session
+    if "file_changed_for_chat_mode" not in st.session_state:
+        st.session_state.file_changed_for_chat_mode = True
+        msgs.clear()
         msgs.add_ai_message("How can I help you?")
+    elif st.session_state.file_changed_for_chat_mode:
+        st.session_state.file_changed_for_chat_mode = False
     
     # Render current messages from StreamlitChatMessageHistory
     display_chat_history()
