@@ -178,6 +178,56 @@ st.set_page_config(
 st.title(TITLE)
 
 # ---------------------------
+# Utility Functions
+# ---------------------------
+
+def log_action(action, metadata=None, run_id=None):
+    """Log an action to LangSmith for observability"""
+    if not LANGSMITH_ENABLED:
+        return None
+    
+    if run_id is None:
+        run_id = str(uuid.uuid4())
+    
+    if metadata is None:
+        metadata = {}
+    
+    # Add common metadata
+    metadata.update({
+        "action": action,
+        "app_mode": app_mode,
+        "model": model_option,
+        "timestamp": str(datetime.now())
+    })
+    
+    try:
+        # Create run in LangSmith (can be used for standalone events)
+        ls_client.create_run(
+            name=f"User Action: {action}",
+            run_type="llm",
+            inputs={"action": action},
+            outputs={"status": "completed"},
+            runtime={"model": model_option},
+            extra={
+                "metadata": metadata
+            },
+            trace_id=run_id,
+            run_id=run_id
+        )
+        
+        # Update UI with run ID
+        if "run_id" in st.session_state:
+            run_id = st.sidebar.empty()
+            run_id.text(f"Run ID: {run_id}")
+            trace_link = st.sidebar.empty()
+            trace_link.markdown(f"[View trace in LangSmith](https://smith.langchain.com/o/viewer/traces/{run_id})")
+        
+        return run_id
+    except Exception as e:
+        print(f"Failed to log action to LangSmith: {e}")
+        return None
+
+# ---------------------------
 # OpenAI API Key Entry and Test
 # ---------------------------
 
@@ -1281,53 +1331,3 @@ elif app_mode == "Analiza z pliku konfiguracyjnego":
 elif app_mode == "Czatowanie z danymi":
     # Display chat with data interface
     display_chat_with_data()
-
-# ---------------------------
-# Utility Functions
-# ---------------------------
-
-def log_action(action, metadata=None, run_id=None):
-    """Log an action to LangSmith for observability"""
-    if not LANGSMITH_ENABLED:
-        return None
-    
-    if run_id is None:
-        run_id = str(uuid.uuid4())
-    
-    if metadata is None:
-        metadata = {}
-    
-    # Add common metadata
-    metadata.update({
-        "action": action,
-        "app_mode": app_mode,
-        "model": model_option,
-        "timestamp": str(datetime.now())
-    })
-    
-    try:
-        # Create run in LangSmith (can be used for standalone events)
-        ls_client.create_run(
-            name=f"User Action: {action}",
-            run_type="llm",
-            inputs={"action": action},
-            outputs={"status": "completed"},
-            runtime={"model": model_option},
-            extra={
-                "metadata": metadata
-            },
-            trace_id=run_id,
-            run_id=run_id
-        )
-        
-        # Update UI with run ID
-        if "run_id" in st.session_state:
-            run_id = st.sidebar.empty()
-            run_id.text(f"Run ID: {run_id}")
-            trace_link = st.sidebar.empty()
-            trace_link.markdown(f"[View trace in LangSmith](https://smith.langchain.com/o/viewer/traces/{run_id})")
-        
-        return run_id
-    except Exception as e:
-        print(f"Failed to log action to LangSmith: {e}")
-        return None
