@@ -20,9 +20,11 @@ dependencies = [
     "pandas>=2.2.3",
     "plotly>=6.0.1",
     "psutil>=7.0.0",
+    "pyyaml>=6.0.2",
     "scikit-learn>=1.6.1",
     "sqlalchemy>=2.0.40",
     "streamlit>=1.44.1",
     "watchdog>=6.0.0",
     "xgboost>=3.0.0",
+    "ydata-profiling",
 ]
