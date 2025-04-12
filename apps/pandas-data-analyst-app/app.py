@@ -57,11 +57,8 @@ possible_paths = [
 
 dotenv_path = next((path for path in possible_paths if os.path.exists(path)), 
                    os.path.join(os.path.dirname(__file__), '..', '..', '.env'))  # Default if none found
-load_dotenv(dotenv_path)
 
-# Setup LangSmith for observability
-os.environ["LANGSMITH_TRACING"] = "true"
-os.environ["LANGSMITH_PROJECT"] = "pandas-data-analyst"
+load_dotenv(dotenv_path)
 
 # Check if LANGSMITH_API_KEY is set, otherwise try to get from environment
 if not os.getenv("LANGSMITH_API_KEY"):
@@ -84,88 +81,6 @@ TITLE = "Analityk danych Sigla"
 
 # Application modes
 APP_MODES = ["Analiza i czatowanie z danymi", "Analiza z pliku konfiguracyjnego"]
-
-# Sample data generator
-def create_sample_bike_sales_data():
-    """Generate sample bike sales data for demonstration purposes."""
-    np.random.seed(42)
-    
-    # Define parameters
-    n_rows = 500
-    start_date = pd.to_datetime('2023-01-01')
-    end_date = pd.to_datetime('2023-12-31')
-    
-    # Generate dates
-    dates = pd.date_range(start=start_date, end=end_date, freq='D')
-    selected_dates = np.random.choice(dates, size=n_rows, replace=True)
-    selected_dates = sorted(selected_dates)
-    
-    # Bike models
-    models = ['Mountain Pro', 'City Cruiser', 'Road Elite', 'Explorer', 'Kids Fun']
-    
-    # Bike colors
-    colors = ['Red', 'Blue', 'Green', 'Black', 'White', 'Yellow', 'Silver']
-    
-    # Categories
-    categories = ['Budget', 'Standard', 'Premium']
-    
-    # Generate data
-    data = {
-        'date': selected_dates,
-        'model': np.random.choice(models, size=n_rows),
-        'color': np.random.choice(colors, size=n_rows),
-        'category': np.random.choice(categories, size=n_rows, p=[0.2, 0.5, 0.3]),
-    }
-    
-    # Generate prices based on category
-    price_base = {
-        'Budget': 300,
-        'Standard': 800,
-        'Premium': 1500,
-    }
-    
-    prices = []
-    for cat in data['category']:
-        base = price_base[cat]
-        variation = np.random.normal(0, base * 0.1)  # 10% standard deviation
-        price = max(base + variation, base * 0.7)  # Ensure no negative prices
-        prices.append(round(price, 2))
-    
-    data['price'] = prices
-    
-    # Generate quantity sold with seasonal patterns
-    quantity = []
-    for date in selected_dates:
-        # Higher sales in summer months (June-August)
-        month = date.month
-        if 6 <= month <= 8:
-            base_quantity = np.random.poisson(5)
-        else:
-            base_quantity = np.random.poisson(3)
-        
-        # Weekend boost
-        if date.dayofweek >= 5:  # Saturday or Sunday
-            base_quantity += np.random.poisson(2)
-            
-        quantity.append(max(1, base_quantity))  # At least 1 sold
-    
-    data['quantity_sold'] = quantity
-    
-    # Calculate revenue
-    data['revenue'] = [p * q for p, q in zip(data['price'], data['quantity_sold'])]
-    
-    # Create DataFrame
-    df = pd.DataFrame(data)
-    
-    # Add some special discount events
-    special_dates = ['2023-07-04', '2023-11-24', '2023-12-26']
-    for special_date in special_dates:
-        idx = df[df['date'] == pd.to_datetime(special_date)].index
-        df.loc[idx, 'price'] = df.loc[idx, 'price'] * 0.8
-        df.loc[idx, 'quantity_sold'] = df.loc[idx, 'quantity_sold'] * 2
-        df.loc[idx, 'revenue'] = df.loc[idx, 'price'] * df.loc[idx, 'quantity_sold']
-    
-    return df
 
 # ---------------------------
 # Streamlit App Configuration
@@ -279,18 +194,6 @@ if LANGSMITH_ENABLED:
         os.environ["LANGSMITH_TRACING"] = "false"
         st.sidebar.warning("LangSmith tracing disabled")
     
-    # Add expander with info
-    with st.sidebar.expander("LangSmith Tracing Info"):
-        st.write("""
-        LangSmith tracing provides detailed logs of:
-        - LLM calls and tokens usage
-        - Data transformations
-        - Agent operations and decisions
-        - Generated code and visualizations
-        
-        Each query generates a unique Run ID that can be viewed in the LangSmith UI.
-        """)
-    
     # Show current run ID
     run_id = st.sidebar.empty()
     trace_link = st.sidebar.empty()
@@ -318,13 +221,33 @@ Wgraj plik CSV lub Excel z danymi do analizy lub użyj przykładowych danych.
 if "current_file_name" not in st.session_state:
     st.session_state.current_file_name = None
 
-use_sample_data = st.checkbox("Użyj przykładowych danych o sprzedaży rowerów", value=False)
+# Check if data source has changed
+if st.session_state.current_file_name != "sample_data":
+    # Reset session state for new data
+    st.session_state.data_history = {
+        "raw": None,
+        "cleaned": None, 
+        "engineered": None,
+        "current": None,
+        "cleaning_explanation": None,
+        "engineering_explanation": None,
+    }
+    st.session_state.config_analysis_results = None
+    st.session_state.config_analyzed = False
+    st.session_state.data_chat_history = []
+    st.session_state.plots = []
+    st.session_state.dataframes = []
+    if "langchain_messages" in st.session_state:
+        st.session_state.langchain_messages = []
+    st.session_state.current_file_name = "sample_data"
 
-if use_sample_data:
-    df = create_sample_bike_sales_data()
-    
-    # Check if data source has changed
-    if st.session_state.current_file_name != "sample_data":
+
+uploaded_file = st.file_uploader(
+    "Choose a CSV or Excel file", type=["csv", "xlsx", "xls"]
+)
+if uploaded_file is not None:
+    # Check if a new file has been uploaded
+    if st.session_state.current_file_name != uploaded_file.name:
         # Reset session state for new data
         st.session_state.data_history = {
             "raw": None,
@@ -341,50 +264,21 @@ if use_sample_data:
         st.session_state.dataframes = []
         if "langchain_messages" in st.session_state:
             st.session_state.langchain_messages = []
-        st.session_state.current_file_name = "sample_data"
+        # Ensure we reset any other relevant session state variables
+        if "is_followup" in st.session_state:
+            st.session_state.is_followup = False
+        st.session_state.current_file_name = uploaded_file.name
     
-    st.success("Załadowano przykładowe dane o sprzedaży rowerów.")
-    
+    if uploaded_file.name.endswith(".csv"):
+        df = pd.read_csv(uploaded_file)
+    else:
+        df = pd.read_excel(uploaded_file)
+
     st.subheader("Data Preview")
     st.dataframe(df.head())
 else:
-    uploaded_file = st.file_uploader(
-        "Choose a CSV or Excel file", type=["csv", "xlsx", "xls"]
-    )
-    if uploaded_file is not None:
-        # Check if a new file has been uploaded
-        if st.session_state.current_file_name != uploaded_file.name:
-            # Reset session state for new data
-            st.session_state.data_history = {
-                "raw": None,
-                "cleaned": None, 
-                "engineered": None,
-                "current": None,
-                "cleaning_explanation": None,
-                "engineering_explanation": None,
-            }
-            st.session_state.config_analysis_results = None
-            st.session_state.config_analyzed = False
-            st.session_state.data_chat_history = []
-            st.session_state.plots = []
-            st.session_state.dataframes = []
-            if "langchain_messages" in st.session_state:
-                st.session_state.langchain_messages = []
-            # Ensure we reset any other relevant session state variables
-            if "is_followup" in st.session_state:
-                st.session_state.is_followup = False
-            st.session_state.current_file_name = uploaded_file.name
-        
-        if uploaded_file.name.endswith(".csv"):
-            df = pd.read_csv(uploaded_file)
-        else:
-            df = pd.read_excel(uploaded_file)
-
-        st.subheader("Data Preview")
-        st.dataframe(df.head())
-    else:
-        st.info("Please upload a CSV or Excel file or use the sample data option to get started.")
-        st.stop()
+    st.info("Please upload a CSV or Excel file or use the sample data option to get started.")
+    st.stop()
 
 # ---------------------------
 # Initialize Storage for Session State
