@@ -321,7 +321,7 @@ if "data_chat_history" not in st.session_state:
 # AI Agent Setup
 # ---------------------------
 
-LOG = False
+LOG = True
 
 # Instantiate DataCleaningAgent
 data_cleaning_agent = DataCleaningAgent(
