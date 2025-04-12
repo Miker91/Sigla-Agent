@@ -83,7 +83,7 @@ MODEL_LIST = ["gpt-4o-mini", "gpt-4o"]
 TITLE = "Analityk danych Sigla"
 
 # Application modes
-APP_MODES = ["Analiza danych z czatem", "Analiza z pliku konfiguracyjnego", "Czatowanie z danymi"]
+APP_MODES = ["Analiza i czatowanie z danymi", "Analiza z pliku konfiguracyjnego"]
 
 # Sample data generator
 def create_sample_bike_sales_data():
@@ -700,634 +700,190 @@ Page 1:
             st.warning("No analysis pages were found in the configuration.")
 
 # ---------------------------
-# Standard Chat Interface for Data Analysis
-# ---------------------------
-
-def display_chat_history():
-    for msg in msgs.messages:
-        with st.chat_message(msg.type):
-            if "PLOT_INDEX:" in msg.content:
-                plot_index = int(msg.content.split("PLOT_INDEX:")[1])
-                st.plotly_chart(
-                    st.session_state.plots[plot_index], key=f"history_plot_{plot_index}"
-                )
-            elif "DATAFRAME_INDEX:" in msg.content:
-                df_index = int(msg.content.split("DATAFRAME_INDEX:")[1])
-                st.dataframe(
-                    st.session_state.dataframes[df_index],
-                    key=f"history_dataframe_{df_index}",
-                )
-            else:
-                st.write(msg.content)
-
-def process_standard_chat(question):
-    """Process a query in the standard data analysis chat mode."""
-    if not st.session_state["OPENAI_API_KEY"]:
-        st.error("Please enter your OpenAI API Key to proceed.")
-        st.stop()
-
-    # Generate a run ID for tracking
-    if LANGSMITH_ENABLED:
-        current_run_id = str(uuid.uuid4())
-        st.session_state["run_id"] = current_run_id
-        
-        # Update sidebar with run ID
-        run_id.text(f"Run ID: {current_run_id}")
-        trace_link.markdown(f"[View trace in LangSmith](https://smith.langchain.com/o/viewer/traces/{current_run_id})")
-        
-        # Log the start of query processing
-        log_action("query_started", 
-                   metadata={"question": question, "file": st.session_state.current_file_name},
-                   run_id=current_run_id)
-
-    with st.spinner("Thinking..."):
-        st.chat_message("human").write(question)
-        msgs.add_user_message(question)
-
-        # Store original data if this is first question
-        if st.session_state.data_history["raw"] is None:
-            st.session_state.data_history["raw"] = df.copy()
-            st.session_state.data_history["current"] = df.copy()
-            
-            if LANGSMITH_ENABLED:
-                # Log data loaded event
-                log_action("data_loaded", 
-                           metadata={"shape": df.shape, "columns": df.columns.tolist()},
-                           run_id=current_run_id)
-
-        # Check if this is a follow-up question about previous processing or data
-        followup_analysis_prompt = f"""
-        Analyze if this user query is a follow-up question about previous data processing results or asking for a targeted correction:
-        User query: "{question}"
-        
-        Determine if the query:
-        1. Is asking about why specific data was processed in a certain way (explanation request)
-        2. Is asking to correct or modify specific data elements from previous processing (correction request)
-        3. Is a new standalone question (new request)
-        
-        Return a JSON with these keys:
-        - "request_type": one of ["explanation", "correction", "new"]
-        - "focuses_on": one of ["cleaning", "engineering", "analysis", "general"] (which step it's asking about)
-        - "data_elements": list of specific data elements mentioned (column names, values, etc.)
-        
-        Example: {{"request_type": "explanation", "focuses_on": "cleaning", "data_elements": ["outliers", "price"]}}
-        
-        IMPORTANT: Return ONLY the JSON object with no additional text.
-        """
-        
-        try:
-            followup_response = llm.invoke(followup_analysis_prompt)
-            response_content = followup_response.content.strip()
-            
-            # Parse JSON response with error handling
-            import re
-            json_match = re.search(r'\{.*\}', response_content, re.DOTALL)
-            if json_match:
-                response_content = json_match.group(0)
-            
-            if response_content.startswith("```json"):
-                response_content = response_content.replace("```json", "", 1).replace("```", "", 1)
-            elif response_content.startswith("```"):
-                response_content = response_content.replace("```", "", 1).replace("```", "", 1)
-                
-            followup_decision = json.loads(response_content.strip())
-            request_type = followup_decision.get("request_type", "new")
-            focuses_on = followup_decision.get("focuses_on", "general")
-            data_elements = followup_decision.get("data_elements", [])
-            
-            # Set flag for followup processing
-            st.session_state.is_followup = request_type in ["explanation", "correction"]
-            
-        except Exception as e:
-            # Default to new question if parsing fails
-            request_type = "new"
-            focuses_on = "general"
-            data_elements = []
-            st.session_state.is_followup = False
-            
-        # Handle follow-up explanation requests
-        if request_type == "explanation":
-            if focuses_on == "cleaning" and st.session_state.data_history["cleaning_explanation"]:
-                explanation = st.session_state.data_history["cleaning_explanation"]
-                
-                # Get more specific explanation if data elements are mentioned
-                if data_elements:
-                    specific_prompt = f"""
-                    The user is asking about the cleaning process for these specific elements: {', '.join(data_elements)}
-                    
-                    Here is the full explanation of the cleaning process:
-                    {explanation}
-                    
-                    Provide a targeted explanation focusing ONLY on how those specific elements were processed.
-                    """
-                    specific_explanation = llm.invoke(specific_prompt).content
-                    st.chat_message("ai").write(specific_explanation)
-                    msgs.add_ai_message(specific_explanation)
-                else:
-                    st.chat_message("ai").write(explanation)
-                    msgs.add_ai_message(explanation)
-                
-            elif focuses_on == "engineering" and st.session_state.data_history["engineering_explanation"]:
-                explanation = st.session_state.data_history["engineering_explanation"]
-                
-                # Get more specific explanation if data elements are mentioned
-                if data_elements:
-                    specific_prompt = f"""
-                    The user is asking about the feature engineering process for these specific elements: {', '.join(data_elements)}
-                    
-                    Here is the full explanation of the engineering process:
-                    {explanation}
-                    
-                    Provide a targeted explanation focusing ONLY on how those specific elements were processed.
-                    """
-                    specific_explanation = llm.invoke(specific_prompt).content
-                    st.chat_message("ai").write(specific_explanation)
-                    msgs.add_ai_message(specific_explanation)
-                else:
-                    st.chat_message("ai").write(explanation)
-                    msgs.add_ai_message(explanation)
-            else:
-                # No relevant explanation found
-                st.chat_message("ai").write("I don't have a detailed explanation for that specific processing step.")
-                msgs.add_ai_message("I don't have a detailed explanation for that specific processing step.")
-                
-            # Skip the rest of processing for explanation requests
-            st.stop()
-            
-        # Handle follow-up correction requests
-        if request_type == "correction":
-            current_df = st.session_state.data_history["current"]
-            
-            if focuses_on == "cleaning":
-                # Go back to raw data for corrections related to cleaning
-                base_df = st.session_state.data_history["raw"]
-                correction_agent = data_cleaning_agent
-                
-                # Create targeted cleaning instructions
-                targeted_instructions = f"""
-                This is a targeted correction request. The user wants to fix specific issues with: {', '.join(data_elements)}
-                
-                Only apply cleaning operations to these specific elements. Do not modify other parts of the data.
-                
-                User's correction request: {question}
-                """
-                
-                st.chat_message("ai").write("Applying targeted cleaning correction...")
-                msgs.add_ai_message("Applying targeted cleaning correction...")
-                
-                try:
-                    correction_agent.invoke_agent(
-                        user_instructions=targeted_instructions,
-                        data_raw=base_df,
-                    )
-                    corrected_df = correction_agent.get_data_cleaned()
-                    
-                    if corrected_df is not None:
-                        # Store explanation for future reference
-                        if hasattr(correction_agent, "get_workflow_summary"):
-                            explanation = correction_agent.get_workflow_summary() or "Targeted cleaning was performed."
-                        else:
-                            explanation = "Targeted cleaning was performed based on your request."
-                        
-                        st.session_state.data_history["cleaned"] = corrected_df
-                        st.session_state.data_history["current"] = corrected_df
-                        st.session_state.data_history["cleaning_explanation"] = explanation
-                        
-                        st.chat_message("ai").write("Targeted cleaning correction applied successfully.")
-                        msgs.add_ai_message("Targeted cleaning correction applied successfully.")
-                        
-                        # Display the corrected data
-                        df_index = len(st.session_state.dataframes)
-                        st.session_state.dataframes.append(corrected_df)
-                        msgs.add_ai_message(f"DATAFRAME_INDEX:{df_index}")
-                        st.dataframe(corrected_df)
-                    else:
-                        st.chat_message("ai").write("The targeted cleaning did not result in any changes to the data.")
-                        msgs.add_ai_message("The targeted cleaning did not result in any changes to the data.")
-                except Exception as e:
-                    error_msg = f"Error applying targeted correction: {str(e)}"
-                    st.chat_message("ai").write(error_msg)
-                    msgs.add_ai_message(error_msg)
-                
-                # Skip the rest of processing for correction requests
-                st.stop()
-                
-            elif focuses_on == "engineering":
-                # Use cleaned data as base for engineering corrections if available
-                base_df = st.session_state.data_history["cleaned"] if st.session_state.data_history["cleaned"] is not None else current_df
-                correction_agent = feature_agent
-                
-                # Create targeted engineering instructions
-                targeted_instructions = f"""
-                This is a targeted correction request. The user wants to fix specific engineered features: {', '.join(data_elements)}
-                
-                Only apply feature engineering operations to these specific elements. Do not modify other parts of the data.
-                
-                User's correction request: {question}
-                """
-                
-                st.chat_message("ai").write("Applying targeted feature engineering correction...")
-                msgs.add_ai_message("Applying targeted feature engineering correction...")
-                
-                try:
-                    correction_agent.invoke_agent(
-                        user_instructions=targeted_instructions,
-                        data_raw=base_df,
-                    )
-                    corrected_df = correction_agent.get_data_engineered()
-                    
-                    if corrected_df is not None:
-                        # Store explanation for future reference
-                        if hasattr(correction_agent, "get_workflow_summary"):
-                            explanation = correction_agent.get_workflow_summary() or "Targeted feature engineering was performed."
-                        else:
-                            explanation = "Targeted feature engineering was performed based on your request."
-                        
-                        st.session_state.data_history["engineered"] = corrected_df
-                        st.session_state.data_history["current"] = corrected_df
-                        st.session_state.data_history["engineering_explanation"] = explanation
-                        
-                        st.chat_message("ai").write("Targeted feature engineering correction applied successfully.")
-                        msgs.add_ai_message("Targeted feature engineering correction applied successfully.")
-                        
-                        # Display the corrected data
-                        df_index = len(st.session_state.dataframes)
-                        st.session_state.dataframes.append(corrected_df)
-                        msgs.add_ai_message(f"DATAFRAME_INDEX:{df_index}")
-                        st.dataframe(corrected_df)
-                    else:
-                        st.chat_message("ai").write("The targeted feature engineering did not result in any changes to the data.")
-                        msgs.add_ai_message("The targeted feature engineering did not result in any changes to the data.")
-                except Exception as e:
-                    error_msg = f"Error applying targeted correction: {str(e)}"
-                    st.chat_message("ai").write(error_msg)
-                    msgs.add_ai_message(error_msg)
-                
-                # Skip the rest of processing for correction requests
-                st.stop()
-
-        # For new questions, continue with the normal processing flow
-        current_df = st.session_state.data_history["current"]
-
-        # --- Workflow Analysis Step ---
-        # Use the LLM to analyze the user query and determine which data processing steps are needed
-        workflow_analysis_prompt = f"""
-        Analyze the following user query for a data analysis task and determine which steps are needed.
-        Query: "{question}"
-        
-        Determine if the query suggests a need for:
-        1. Data cleaning (e.g., handling missing values, outliers, duplicates)
-        2. Feature engineering (e.g., creating new columns, transforming data, encoding)
-        
-        Return a JSON with two boolean keys: "needs_cleaning" and "needs_feature_engineering"
-        Example: {{"needs_cleaning": true, "needs_feature_engineering": false}}
-        
-        IMPORTANT: Return ONLY the JSON object with no additional text, explanations, or Markdown formatting.
-        """
-        
-        try:
-            workflow_response = llm.invoke(workflow_analysis_prompt)
-            response_content = workflow_response.content.strip()
-            
-            # Handle potential markdown code block formatting
-            if response_content.startswith("```json"):
-                response_content = response_content.replace("```json", "", 1)
-                response_content = response_content.replace("```", "", 1)
-            elif response_content.startswith("```"):
-                response_content = response_content.replace("```", "", 1)
-                response_content = response_content.replace("```", "", 1)
-            
-            # Find JSON object if wrapped in text
-            import re
-            json_match = re.search(r'\{.*\}', response_content, re.DOTALL)
-            if json_match:
-                response_content = json_match.group(0)
-                
-            workflow_decision = json.loads(response_content.strip())
-            needs_cleaning = workflow_decision.get("needs_cleaning", False)
-            needs_feature_engineering = workflow_decision.get("needs_feature_engineering", False)
-            
-            # Log the decision to the user
-            decision_msg = f"Analysis: Your query {'requires' if needs_cleaning else 'does not require'} data cleaning and {'requires' if needs_feature_engineering else 'does not require'} feature engineering."
-            st.chat_message("ai").write(decision_msg)
-            msgs.add_ai_message(decision_msg)
-            
-        except Exception as e:
-            # If the workflow analysis fails, assume we need both steps to be safe
-            needs_cleaning = True
-            needs_feature_engineering = True
-            st.chat_message("ai").write(f"Analyzing your request... (Using default workflow)")
-            msgs.add_ai_message("Analyzing your request... (Using default workflow)")
-
-        # --- Data Cleaning Step (Conditional) ---
-        if needs_cleaning:
-            try:
-                st.chat_message("ai").write("Cleaning data...")
-                msgs.add_ai_message("Cleaning data...")
-                
-                if LANGSMITH_ENABLED:
-                    log_action("data_cleaning_started", run_id=current_run_id)
-                
-                data_cleaning_agent.invoke_agent(
-                    user_instructions=question,
-                    data_raw=current_df,
-                )
-                cleaned_df = data_cleaning_agent.get_data_cleaned()
-                
-                if cleaned_df is not None:
-                    # Store explanation for future reference
-                    if hasattr(data_cleaning_agent, "get_workflow_summary"):
-                        explanation = data_cleaning_agent.get_workflow_summary() or "Data cleaning was performed."
-                    else:
-                        explanation = "Data cleaning was performed based on general best practices and your request."
-                    
-                    st.session_state.data_history["cleaned"] = cleaned_df
-                    st.session_state.data_history["current"] = cleaned_df
-                    st.session_state.data_history["cleaning_explanation"] = explanation
-                    
-                    if LANGSMITH_ENABLED:
-                        # Log cleaning results
-                        log_action("data_cleaning_completed", 
-                                  metadata={
-                                      "cleaned_shape": cleaned_df.shape,
-                                      "diff_rows": current_df.shape[0] - cleaned_df.shape[0],
-                                      "explanation": explanation[:500]  # Truncate if too long
-                                  },
-                                  run_id=current_run_id)
-                    
-                    st.chat_message("ai").write("Data cleaning complete. Using cleaned data.")
-                    msgs.add_ai_message("Data cleaning complete. Using cleaned data.")
-                    current_df = cleaned_df
-                else:
-                    st.chat_message("ai").write("Data cleaning did not produce new data. Using original data.")
-                    msgs.add_ai_message("Data cleaning did not produce new data. Using original data.")
-            except Exception as dc_error:
-                error_msg = f"An error occurred during data cleaning. Using original data for analysis."
-                st.chat_message("ai").write(error_msg)
-                msgs.add_ai_message(error_msg)
-                
-                if LANGSMITH_ENABLED:
-                    log_action("data_cleaning_error", 
-                              metadata={"error": str(dc_error)},
-                              run_id=current_run_id)
-        else:
-            st.chat_message("ai").write("Skipping data cleaning as it doesn't appear necessary for your query.")
-            msgs.add_ai_message("Skipping data cleaning as it doesn't appear necessary for your query.")
-
-        # --- Feature Engineering Step (Conditional) ---
-        if needs_feature_engineering:
-            try:
-                st.chat_message("ai").write("Performing feature engineering...")
-                msgs.add_ai_message("Performing feature engineering...")
-                
-                if LANGSMITH_ENABLED:
-                    log_action("feature_engineering_started", run_id=current_run_id)
-                
-                feature_agent.invoke_agent(
-                    user_instructions=question,
-                    data_raw=current_df,
-                )
-                engineered_df = feature_agent.get_data_engineered()
-                if engineered_df is not None:
-                    # Store explanation for future reference
-                    if hasattr(feature_agent, "get_workflow_summary"):
-                        explanation = feature_agent.get_workflow_summary() or "Feature engineering was performed."
-                    else:
-                        explanation = "Feature engineering was performed based on your request."
-                    
-                    st.session_state.data_history["engineered"] = engineered_df
-                    st.session_state.data_history["current"] = engineered_df
-                    st.session_state.data_history["engineering_explanation"] = explanation
-                    
-                    if LANGSMITH_ENABLED:
-                        # Log feature engineering results
-                        new_columns = set(engineered_df.columns) - set(current_df.columns)
-                        log_action("feature_engineering_completed", 
-                                  metadata={
-                                      "engineered_shape": engineered_df.shape,
-                                      "new_columns": list(new_columns),
-                                      "explanation": explanation[:500]  # Truncate if too long
-                                  },
-                                  run_id=current_run_id)
-                    
-                    st.chat_message("ai").write("Feature engineering complete. Using engineered data.")
-                    msgs.add_ai_message("Feature engineering complete. Using engineered data.")
-                    current_df = engineered_df
-                else:
-                    st.chat_message("ai").write("Feature engineering did not produce new data. Using current data.")
-                    msgs.add_ai_message("Feature engineering did not produce new data. Using current data.")
-            except Exception as fe_error:
-                error_msg = f"An error occurred during feature engineering. Using current data for analysis."
-                st.chat_message("ai").write(error_msg)
-                msgs.add_ai_message(error_msg)
-                
-                if LANGSMITH_ENABLED:
-                    log_action("feature_engineering_error", 
-                              metadata={"error": str(fe_error)},
-                              run_id=current_run_id)
-        else:
-            st.chat_message("ai").write("Skipping feature engineering as it doesn't appear necessary for your query.")
-            msgs.add_ai_message("Skipping feature engineering as it doesn't appear necessary for your query.")
-
-        try:
-            if LANGSMITH_ENABLED:
-                log_action("analysis_started", run_id=current_run_id)
-                
-            pandas_data_analyst.invoke_agent(
-                user_instructions=question,
-                data_raw=current_df,
-            )
-            result = pandas_data_analyst.get_response()
-            
-            if LANGSMITH_ENABLED:
-                # Log analysis results
-                log_action("analysis_completed", 
-                          metadata={
-                              "routing": result.get("routing_preprocessor_decision", "unknown"),
-                              "has_plot": result.get("plotly_graph") is not None,
-                              "has_table": result.get("data_wrangled") is not None
-                          },
-                          run_id=current_run_id)
-        except Exception as e:
-            st.chat_message("ai").write(
-                "An error occurred while processing your query. Please try again."
-            )
-            msgs.add_ai_message(
-                "An error occurred while processing your query. Please try again."
-            )
-            
-            if LANGSMITH_ENABLED:
-                log_action("analysis_error", 
-                          metadata={"error": str(e)},
-                          run_id=current_run_id)
-            
-            st.stop()
-
-        routing = result.get("routing_preprocessor_decision")
-
-        if routing == "chart" and not result.get("plotly_error", False):
-            # Process chart result
-            plot_data = result.get("plotly_graph")
-            if plot_data:
-                # Convert dictionary to JSON string if needed
-                if isinstance(plot_data, dict):
-                    plot_json = json.dumps(plot_data)
-                else:
-                    plot_json = plot_data
-                plot_obj = pio.from_json(plot_json)
-                response_text = "Returning the generated chart."
-                # Store the chart
-                plot_index = len(st.session_state.plots)
-                st.session_state.plots.append(plot_obj)
-                msgs.add_ai_message(response_text)
-                msgs.add_ai_message(f"PLOT_INDEX:{plot_index}")
-                st.chat_message("ai").write(response_text)
-                st.plotly_chart(plot_obj)
-                
-                # Add feedback collection if LangSmith is enabled
-                if LANGSMITH_ENABLED and "run_id" in st.session_state:
-                    current_run = st.session_state["run_id"]
-                    col1, col2 = st.columns([1, 8])
-                    with col1:
-                        if st.button("👍", key=f"thumbs_up_{current_run}"):
-                            try:
-                                ls_client.create_feedback(
-                                    current_run,
-                                    key="user-score",
-                                    score=1.0,
-                                    comment="User liked the result"
-                                )
-                                st.success("Feedback recorded!")
-                            except Exception as e:
-                                st.error(f"Failed to record feedback: {e}")
-                    with col2:
-                        if st.button("👎", key=f"thumbs_down_{current_run}"):
-                            try:
-                                ls_client.create_feedback(
-                                    current_run,
-                                    key="user-score",
-                                    score=0.0,
-                                    comment="User disliked the result"
-                                )
-                                st.success("Feedback recorded!")
-                            except Exception as e:
-                                st.error(f"Failed to record feedback: {e}")
-                
-                if LANGSMITH_ENABLED:
-                    # Log chart display
-                    log_action("chart_displayed", 
-                              metadata={
-                                  "plot_type": result.get("plot_type", "unknown"),
-                                  "plot_index": plot_index
-                              },
-                              run_id=current_run_id)
-            else:
-                st.chat_message("ai").write("The agent did not return a valid chart.")
-                msgs.add_ai_message("The agent did not return a valid chart.")
-                
-                if LANGSMITH_ENABLED:
-                    log_action("chart_error", run_id=current_run_id)
-
-        elif routing == "table":
-            # Process table result
-            data_wrangled = result.get("data_wrangled")
-            if data_wrangled is not None:
-                response_text = "Returning the data table."
-                # Ensure data_wrangled is a DataFrame
-                if not isinstance(data_wrangled, pd.DataFrame):
-                    data_wrangled = pd.DataFrame(data_wrangled)
-                df_index = len(st.session_state.dataframes)
-                st.session_state.dataframes.append(data_wrangled)
-                msgs.add_ai_message(response_text)
-                msgs.add_ai_message(f"DATAFRAME_INDEX:{df_index}")
-                st.chat_message("ai").write(response_text)
-                st.dataframe(data_wrangled)
-                
-                if LANGSMITH_ENABLED:
-                    # Log table display
-                    log_action("table_displayed", 
-                              metadata={
-                                  "table_shape": data_wrangled.shape,
-                                  "table_index": df_index,
-                                  "columns": data_wrangled.columns.tolist()[:20]  # First 20 columns
-                              },
-                              run_id=current_run_id)
-            else:
-                st.chat_message("ai").write("No table data was returned by the agent.")
-                msgs.add_ai_message("No table data was returned by the agent.")
-                
-                if LANGSMITH_ENABLED:
-                    log_action("table_error", run_id=current_run_id)
-        else:
-            # Fallback if routing decision is unclear or if chart error occurred
-            data_wrangled = result.get("data_wrangled")
-            if data_wrangled is not None:
-                response_text = (
-                    "I apologize. There was an issue with generating the chart. "
-                    "Returning the data table instead."
-                )
-                if not isinstance(data_wrangled, pd.DataFrame):
-                    data_wrangled = pd.DataFrame(data_wrangled)
-                df_index = len(st.session_state.dataframes)
-                st.session_state.dataframes.append(data_wrangled)
-                msgs.add_ai_message(response_text)
-                msgs.add_ai_message(f"DATAFRAME_INDEX:{df_index}")
-                st.chat_message("ai").write(response_text)
-                st.dataframe(data_wrangled)
-                
-                if LANGSMITH_ENABLED:
-                    log_action("fallback_table_displayed", 
-                              metadata={"table_index": df_index},
-                              run_id=current_run_id)
-            else:
-                response_text = (
-                    "An error occurred while processing your query. Please try again."
-                )
-                msgs.add_ai_message(response_text)
-                st.chat_message("ai").write(response_text)
-                
-                if LANGSMITH_ENABLED:
-                    log_action("response_error", run_id=current_run_id)
-                    
-        # Log completion of query processing
-        if LANGSMITH_ENABLED:
-            log_action("query_completed", run_id=current_run_id)
-
-# ---------------------------
 # Main Application Logic Based on Selected Mode
 # ---------------------------
 
-if app_mode == "Analiza danych z czatem":
+if app_mode == "Analiza i czatowanie z danymi":
     # Display example questions
     with st.expander("Example Questions", expanded=False):
         st.write(
             """
-            Calculate the 7-day rolling average of 'quantity_sold' for each bike model. Then create appropiate chart presenting the data
+            Examples:
+            - Calculate the 7-day rolling average of 'quantity_sold' for each bike model. Then create appropiate chart presenting the data
+            - What is the data about?
+            - Create a function that merges two columns
+            - What's the relationship between price and quantity_sold?
             """
         )
     
-    # Initialize chat history
-    msgs = StreamlitChatMessageHistory(key="langchain_messages")
+    # Initialize unified chat history
+    if "unified_chat_history" not in st.session_state:
+        st.session_state.unified_chat_history = []
+        
+    # Display unified chat history
+    for msg in st.session_state.unified_chat_history:
+        if msg["type"] == "user":
+            with st.chat_message("human"):
+                st.write(msg["content"])
+        else:
+            with st.chat_message("assistant"):
+                # Handle different response types
+                if "text" in msg["content"]:
+                    st.write(msg["content"]["text"])
+                
+                # Display any plot if available
+                if "plot" in msg["content"] and msg["content"]["plot"] is not None:
+                    st.plotly_chart(msg["content"]["plot"])
+                
+                # Display any dataframe if available
+                if "dataframe" in msg["content"] and msg["content"]["dataframe"] is not None:
+                    st.dataframe(msg["content"]["dataframe"])
+                    
+                # Display follow-up suggestions if available
+                if "followups" in msg["content"] and msg["content"]["followups"]:
+                    followups = msg["content"]["followups"]
+                    if followups and isinstance(followups, list) and len(followups) > 0:
+                        with st.expander("Suggested follow-up questions"):
+                            for q in followups:
+                                st.markdown(f"- {q.strip()}")
     
-    # Clear messages if they are from a previous file/session
-    if "file_changed_for_chat_mode" not in st.session_state:
-        st.session_state.file_changed_for_chat_mode = True
-        msgs.clear()
-        msgs.add_ai_message("How can I help you?")
-    elif st.session_state.file_changed_for_chat_mode:
-        st.session_state.file_changed_for_chat_mode = False
-    
-    # Render current messages from StreamlitChatMessageHistory
-    display_chat_history()
-    
-    # Chat input for standard data analysis mode
-    if question := st.chat_input("Enter your question here:", key="query_input"):
-        process_standard_chat(question)
+    # Unified chat input
+    if user_query := st.chat_input("Ask about your data or request analysis:"):
+        # Store the original data if this is first question
+        if st.session_state.data_history["raw"] is None:
+            st.session_state.data_history["raw"] = df.copy()
+            st.session_state.data_history["current"] = df.copy()
+        
+        # Add user message to history
+        st.session_state.unified_chat_history.append({
+            "type": "user",
+            "content": user_query
+        })
+        
+        # Display user message
+        with st.chat_message("human"):
+            st.write(user_query)
+            
+        # Analyze query to determine the best agent to handle it
+        with st.spinner("Analyzing your question..."):
+            # Get current data state
+            current_data = st.session_state.data_history["current"]
+            
+            # Query analysis to determine routing
+            agent_routing_prompt = f"""
+            Analyze this query and determine if it's better handled by:
+            1. A general data chat agent (for simple questions about the data, explaining columns, etc.)
+            2. A data analysis agent (for calculations, statistics, visualizations, data transformations)
+            
+            User query: "{user_query}"
+            
+            Return ONLY one of these values:
+            - "chat" (for general data chat questions)
+            - "analysis" (for data analysis operations)
+            """
+            
+            # Determine which agent to use
+            routing_response = llm.invoke(agent_routing_prompt).content.strip().lower()
+            agent_type = "chat" if "chat" in routing_response else "analysis"
+            
+            # Process with appropriate agent
+            if agent_type == "chat":
+                # Get analysis results if available
+                analysis_results = st.session_state.config_analysis_results if st.session_state.config_analyzed else {}
+                
+                # Process with DataChatAgent
+                data_chat_agent.invoke_agent(
+                    data_raw=df,
+                    data_cleaned=current_data,
+                    analysis_results=analysis_results,
+                    user_query=user_query
+                )
+                
+                # Get the response
+                chat_response = data_chat_agent.get_response()
+                
+                # Format response for unified history
+                response_content = {
+                    "text": chat_response["answer"],
+                    "followups": chat_response.get("suggested_followups", [])
+                }
+                
+                # Add to unified history
+                st.session_state.unified_chat_history.append({
+                    "type": "assistant",
+                    "content": response_content
+                })
+                
+                # Display the response
+                with st.chat_message("assistant"):
+                    st.write(response_content["text"])
+                    
+                    # Display follow-up suggestions
+                    if response_content["followups"]:
+                        with st.expander("Suggested follow-up questions"):
+                            for q in response_content["followups"]:
+                                st.markdown(f"- {q.strip()}")
+            else:
+                # Process with PandasDataAnalyst
+                pandas_data_analyst.invoke_agent(
+                    user_instructions=user_query,
+                    data_raw=current_data,
+                )
+                result = pandas_data_analyst.get_response()
+                
+                # Initialize response content
+                response_content = {
+                    "text": "Here are the analysis results:",
+                    "plot": None,
+                    "dataframe": None
+                }
+                
+                # Process result based on routing decision
+                routing = result.get("routing_preprocessor_decision")
+                
+                if routing == "chart" and not result.get("plotly_error", False):
+                    # Process chart result
+                    plot_data = result.get("plotly_graph")
+                    if plot_data:
+                        # Convert dictionary to JSON string if needed
+                        if isinstance(plot_data, dict):
+                            plot_json = json.dumps(plot_data)
+                        else:
+                            plot_json = plot_data
+                        plot_obj = pio.from_json(plot_json)
+                        
+                        # Update response content
+                        response_content["text"] = "Here's the visualization based on your request."
+                        response_content["plot"] = plot_obj
+                
+                elif routing == "table":
+                    # Process table result
+                    data_wrangled = result.get("data_wrangled")
+                    if data_wrangled is not None:
+                        # Ensure data_wrangled is a DataFrame
+                        if not isinstance(data_wrangled, pd.DataFrame):
+                            data_wrangled = pd.DataFrame(data_wrangled)
+                            
+                        # Update response content
+                        response_content["text"] = "Here's the data table based on your request."
+                        response_content["dataframe"] = data_wrangled
+                
+                # Add to unified history
+                st.session_state.unified_chat_history.append({
+                    "type": "assistant",
+                    "content": response_content
+                })
+                
+                # Display the response
+                with st.chat_message("assistant"):
+                    st.write(response_content["text"])
+                    
+                    if response_content["plot"] is not None:
+                        st.plotly_chart(response_content["plot"])
+                        
+                    if response_content["dataframe"] is not None:
+                        st.dataframe(response_content["dataframe"])
 
 elif app_mode == "Analiza z pliku konfiguracyjnego":
     # Display configuration-based analysis interface
     display_config_analysis()
-
-elif app_mode == "Czatowanie z danymi":
-    # Display chat with data interface
-    display_chat_with_data()
