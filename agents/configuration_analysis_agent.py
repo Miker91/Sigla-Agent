@@ -107,7 +107,7 @@ class ConfigurationAnalysisAgent(BaseAgent):
     ):
         self._params = {
             "model": model,
-            "data_cleaning_agent": data_cleaning_agent,
+            "data_cleaning_agent": None,  # Set to None to disable data cleaning
             "data_visualization_agent": data_visualization_agent,
             "n_samples": n_samples,
             "log": log,
@@ -269,7 +269,7 @@ def make_configuration_analysis_agent(
     model:
         The language model to use
     data_cleaning_agent:
-        Optional data cleaning agent for preprocessing
+        Optional data cleaning agent for preprocessing (not used by default)
     data_visualization_agent:
         Data visualization agent for creating charts
     n_samples: int
@@ -374,68 +374,8 @@ def make_configuration_analysis_agent(
     # Node for cleaning data if a cleaning agent is provided
     def clean_data(state: ConfigAnalysisGraphState):
         """Clean the data using the provided data cleaning agent if available."""
-        if data_cleaning_agent is None:
-            # No cleaning agent, use raw data as cleaned data
-            return {"data_cleaned": state["data_raw"]}
-        
-        # Use the cleaning agent to clean the data
-        try:
-            # Get structured config
-            config_data = state["config_data"]
-            
-            # Generate cleaning instructions from config
-            cleaning_prompt = PromptTemplate.from_template("""
-            Jesteś specjalistą ds. czyszczenia danych przygotowującym dane do analizy.
-            Na podstawie poniższego opisu danych i wymagań analizy, 
-            podaj kompleksowe instrukcje czyszczenia danych.
-            
-            Opis danych: {general_description}
-            
-            Wymagania analizy:
-            {analysis_requirements}
-            
-            Przedstaw szczegółowe instrukcje czyszczenia danych w celu przygotowania tego zbioru danych do tych analiz.
-            Skup się na zapewnieniu jakości danych, obsłudze brakujących wartości, poprawie typów danych,
-            oraz wszelkich transformacjach potrzebnych do określonych wykresów i analiz.
-            """)
-            
-            # Extract analysis requirements for all pages
-            pages = config_data.get("pages", [])
-            analysis_requirements = "\n".join([
-                f"Page {page.get('page_number', i+1)}: {page.get('charts', '')}"
-                for i, page in enumerate(pages)
-            ])
-            
-            cleaning_instructions = llm.invoke(
-                cleaning_prompt.format(
-                    general_description=config_data.get("general_description", ""),
-                    analysis_requirements=analysis_requirements
-                )
-            ).content
-            
-            # Invoke the data cleaning agent
-            data_raw_df = pd.DataFrame.from_dict(state["data_raw"])
-            data_cleaning_agent.invoke_agent(
-                user_instructions=cleaning_instructions,
-                data_raw=data_raw_df
-            )
-            
-            # Get the cleaned data
-            cleaned_df = data_cleaning_agent.get_data_cleaned()
-            
-            if cleaned_df is not None:
-                return {"data_cleaned": cleaned_df.to_dict()}
-            else:
-                # If cleaning failed, use raw data
-                return {"data_cleaned": state["data_raw"]}
-            
-        except Exception as e:
-            # If any error occurs, use raw data
-            error_msg = f"Error during data cleaning: {str(e)}"
-            return {
-                "data_cleaned": state["data_raw"],
-                "error_messages": {**state["error_messages"], "cleaning": error_msg}
-            }
+        # Skip data cleaning and use raw data as cleaned data
+        return {"data_cleaned": state["data_raw"]}
     
     # Node for analyzing the current page
     def analyze_page(state: ConfigAnalysisGraphState):

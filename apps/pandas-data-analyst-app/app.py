@@ -459,7 +459,7 @@ def display_config_analysis():
     st.subheader("Analyze Data with Configuration File")
     
     # Add option to download sample configuration
-    sample_config_path = os.path.join(os.path.dirname(__file__), "sample_config.txt")
+    sample_config_path = os.path.join(os.path.dirname(__file__), "sample_config.yaml")
     if os.path.exists(sample_config_path):
         with open(sample_config_path, 'r') as f:
             sample_config = f.read()
@@ -469,7 +469,7 @@ def display_config_analysis():
             st.download_button(
                 label="Download Sample Config",
                 data=sample_config,
-                file_name="sample_config.txt",
+                file_name="sample_config.yamlt",
                 mime="text/plain"
             )
         with col1:
