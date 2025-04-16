@@ -76,7 +76,7 @@ except Exception as e:
 
 # * APP INPUTS ----
 
-MODEL_LIST = ["gpt-4o-mini", "gpt-4o"]
+MODEL_LIST = ["gpt-4o-mini", "gpt-4o", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano"]
 TITLE = "Analityk danych Sigla"
 
 # Application modes

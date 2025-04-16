@@ -1,0 +1,27 @@
+Ogólny opis danych:
+- Zbiór danych zawiera informacje o sprzedaży rowerów.
+- Dostępne kolumny: date, model, color, category, price, quantity_sold, revenue
+
+Strona 1:
+  - Tytuł: "Przegląd sprzedaży rowerów"
+  - Wykresy:
+    - "Pokaż trend sprzedaży miesięcznej w czasie"
+    - "Przedstaw udział kategorii rowerów w całkowitej sprzedaży na wykresie kołowym"
+  - Opis: "Przeanalizuj sezonowość sprzedaży i zidentyfikuj okresy z największą sprzedażą. Wyjaśnij, które kategorie rowerów generują najwięcej przychodów i dlaczego."
+
+Strona 2:
+  - Tytuł: "Analiza cen i wolumenu sprzedaży"
+  - Wykresy:
+    - "Stwórz histogram rozkładu cen rowerów"
+    - "Pokaż zależność między ceną a ilością sprzedanych jednostek na wykresie punktowym"
+  - Tabele:
+    - "Przygotuj tabelę z TOP 5 modelami według wartości przychodów"
+  - Opis: "Przeanalizuj relację między ceną a wielkością sprzedaży. Czy istnieje optymalna cena maksymalizująca przychody?"
+
+Strona 3:
+  - Tytuł: "Analiza kolorów i kategorii"
+  - Wykresy:
+    - "Stwórz wykres słupkowy pokazujący popularność kolorów w różnych kategoriach rowerów"
+  - Tabele:
+    - "Przedstaw tabelę krzyżową kategorii i kolorów z wartościami sprzedaży"
+  - Opis: "Zidentyfikuj najlepiej sprzedające się kombinacje kategorii i kolorów. Jakie wnioski można wyciągnąć odnośnie preferencji klientów?" 
