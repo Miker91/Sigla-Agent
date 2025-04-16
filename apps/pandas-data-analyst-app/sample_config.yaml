@@ -6,16 +6,14 @@ Analiza danych:
 Page 1:
     - Title: "MULTI OBSERVATION STUDY DLA SPECJALISTÓW I UNDERWRITERÓW"
     - Charts: "Wykres kołowy przedstawiający procentowy udział wartości w kolumnie "Klasyfikacja".
-    - Description: "Marnotrawienia czasu. VA to wartość dodana, NVA-K to marnotrastwo koniecznie, NVA-O marnotrastwo occzywiste. Weź pod uwagę komentarze z kolumny Komentarz"
+    - Description: "Marnotrawienia czasu. VA to wartość dodana, NVA-K to marnotrastwo koniecznie, NVA-O marnotrastwo oczywiste. Weź pod uwagę komentarze z kolumny Komentarz"
 Page 2:
     - Title: "MULTI OBSERVATION STUDY PODSUMOWANIE MS-A"
     - Charts: |
         "Skumulowany wykres słupkowy poziomy (stacked bar chart).
-        Przedstawia on udział trzech kategorii (oznaczonych kolorami: żółty, czerwony i zielony) w łącznej wartości 100% dla różnych Badań (kolumna "Badanie"). Każdy słupek reprezentuje jedno Badanie, a segmenty pokazują procentowy udział:
-        NVA-K (żółty),
-        NVA-O (czerwony),
-        VA (zielony).".
-    - Description: "Marnotrawienia czasu. VA to wartość dodana, NVA-K to marnotrastwo koniecznie, NVA-O marnotrastwo occzywiste. Weź pod uwagę komentarze z kolumny Komentarz"
+        Wykres na osi y prezentuje wartości z kolumny "Badanie". Na osi x prezentuje procentowo wartości z kolumny "Klasyfikacja".
+        Przedstawia on udział trzech Klasyfikacji "Klasyfikacja" (oznaczonych kolorami: żółty, czerwony i zielony) w łącznej wartości 100% dla różnych Badań (kolumna "Badanie"). 
+    - Description: "Marnotrawienia czasu. VA to wartość dodana, NVA-K to marnotrastwo koniecznie, NVA-O marnotrastwo oczywiste. Weź pod uwagę komentarze z kolumny Komentarz"
 Page 3:
     - Title: "MULTI OBSERVATION STUDY PODSUMOWANIE MS-A"
     - Charts: "Brak wykresu"
