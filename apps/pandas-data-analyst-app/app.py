@@ -401,12 +401,12 @@ def display_chat_with_data():
                 if "suggested_followups" in msg["assistant"]:
                     followups = msg["assistant"]["suggested_followups"]
                     if followups and isinstance(followups, list) and len(followups) > 0:
-                        with st.expander("Suggested follow-up questions"):
+                        with st.expander("Sugerowane pytania uzupełniające"):
                             for q in followups:
                                 st.markdown(f"- {q.strip()}")
     
     # Chat input
-    if user_query := st.chat_input("Ask a question about your data:"):
+    if user_query := st.chat_input("Zapytaj o dane lub poproś o analizę:"):
         # Display user message
         with st.chat_message("human"):
             st.write(user_query)
@@ -450,7 +450,7 @@ def display_chat_with_data():
                 if "suggested_followups" in response:
                     followups = response["suggested_followups"]
                     if followups and isinstance(followups, list) and len(followups) > 0:
-                        with st.expander("Suggested follow-up questions"):
+                        with st.expander("Sugerowane pytania uzupełniające"):
                             for q in followups:
                                 st.markdown(f"- {q.strip()}")
 
@@ -640,12 +640,12 @@ if app_mode == "Analiza i czatowanie z danymi":
                 if "followups" in msg["content"] and msg["content"]["followups"]:
                     followups = msg["content"]["followups"]
                     if followups and isinstance(followups, list) and len(followups) > 0:
-                        with st.expander("Suggested follow-up questions"):
+                        with st.expander("Sugerowane pytania uzupełniające"):
                             for q in followups:
                                 st.markdown(f"- {q.strip()}")
     
     # Unified chat input
-    if user_query := st.chat_input("Ask about your data or request analysis:"):
+    if user_query := st.chat_input("Zapytaj o dane lub poproś o analizę:"):
         # Store the original data if this is first question
         if st.session_state.data_history["raw"] is None:
             st.session_state.data_history["raw"] = df.copy()
@@ -736,7 +736,7 @@ if app_mode == "Analiza i czatowanie z danymi":
                     
                     # Display follow-up suggestions
                     if response_content["followups"]:
-                        with st.expander("Suggested follow-up questions"):
+                        with st.expander("Sugerowane pytania uzupełniające"):
                             for q in response_content["followups"]:
                                 st.markdown(f"- {q.strip()}")
             else:
@@ -749,7 +749,7 @@ if app_mode == "Analiza i czatowanie z danymi":
                 
                 # Initialize response content
                 response_content = {
-                    "text": "Here are the analysis results:",
+                    "text": "Wyniki analizy:",
                     "plot": None,
                     "dataframe": None
                 }
@@ -769,7 +769,7 @@ if app_mode == "Analiza i czatowanie z danymi":
                         plot_obj = pio.from_json(plot_json)
                         
                         # Update response content
-                        response_content["text"] = "Here's the visualization based on your request."
+                        response_content["text"] = "Oto wizualizacja na podstawie Twojego zapytania."
                         response_content["plot"] = plot_obj
                 
                 elif routing == "table":
@@ -781,7 +781,7 @@ if app_mode == "Analiza i czatowanie z danymi":
                             data_wrangled = pd.DataFrame(data_wrangled)
                             
                         # Update response content
-                        response_content["text"] = "Here's the data table based on your request."
+                        response_content["text"] = "Oto tabela danych na podstawie Twojego zapytania."
                         response_content["dataframe"] = data_wrangled
                         
                         # Store this dataframe as the new context for potential follow-ups
