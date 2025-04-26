@@ -76,7 +76,7 @@ except Exception as e:
 
 # * APP INPUTS ----
 
-MODEL_LIST = ["gpt-4o-mini", "gpt-4o", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano"]
+MODEL_LIST =  ["gpt-4o", "gpt-4.1", "gpt-4.1-mini", "o4-mini"]
 TITLE = "Analityk danych Sigla"
 
 # Application modes
@@ -603,14 +603,13 @@ Page 1:
 
 if app_mode == "Analiza i czatowanie z danymi":
     # Display example questions
-    with st.expander("Example Questions", expanded=False):
+    with st.expander("Przykładowe pytania", expanded=False):
         st.write(
             """
-            Examples:
-            - Calculate the 7-day rolling average of 'quantity_sold' for each bike model. Then create appropiate chart presenting the data
-            - What is the data about?
-            - Create a function that merges two columns
-            - What's the relationship between price and quantity_sold?
+            Przykładowe pytania:
+            - Wykres kołowy przedstawiający procentowy udział wartości w kolumnie "Klasyfikacja".
+            - Tabela z TOP 3 wartości "Podczynność" dla "Klasyfikacja"
+            - Skumulowany wykres słupkowy poziomy (stacked bar chart). Wykres na osi y prezentuje wartości z kolumny "Badanie". Na osi x prezentuje procentowo wartości z kolumny "Klasyfikacja". Przedstawia on udział trzech Klasyfikacji "Klasyfikacja" (oznaczonych kolorami: żółty, czerwony i zielony) w łącznej wartości 100% dla różnych Badań (kolumna "Badanie"). 
             """
         )
     
