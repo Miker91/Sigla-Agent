@@ -697,7 +697,7 @@ if app_mode == "Analiza i czatowanie z danymi":
             is_followup_query = False
             input_data_for_agent = None
             # Simple check for follow-up phrases (can be improved with more robust NLP)
-            followup_phrases = ["do tej tabeli", "do powyższej tabeli", "w tej tabeli", "na tej tabeli", "z tej tabeli"]
+            followup_phrases = ["do tej tabeli", "do powyższej tabeli", "w tej tabeli", "na tej tabeli", "z tej tabeli", "z poprzedniej tabeli", "z powyższej tabeli"]
             if st.session_state.last_generated_dataframe is not None and any(phrase in user_query.lower() for phrase in followup_phrases):
                 is_followup_query = True
                 input_data_for_agent = st.session_state.last_generated_dataframe
