@@ -68,10 +68,14 @@ if not os.getenv("LANGSMITH_API_KEY"):
 
 # Initialize LangSmith client
 try:
-    ls_client = Client()
-    LANGSMITH_ENABLED = True
+    # Only initialize if explicitly enabled in environment
+    if os.getenv("ENABLE_LANGSMITH", "false").lower() == "true":
+        ls_client = Client()
+        LANGSMITH_ENABLED = True
+    else:
+        LANGSMITH_ENABLED = False
 except Exception as e:
-    st.sidebar.warning(f"LangSmith initialization failed: {e}. Observability will be limited.")
+    st.sidebar.warning(f"Inicjalizacja LangSmith nie powiodła się: {e}. Funkcje obserwacji będą ograniczone.")
     LANGSMITH_ENABLED = False
 
 # * APP INPUTS ----
@@ -146,19 +150,27 @@ def log_action(action, metadata=None, run_id=None):
 # OpenAI API Key Entry and Test
 # ---------------------------
 
-st.sidebar.header("Enter your OpenAI API Key")
-
-st.session_state["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
+st.sidebar.header("Wprowadź klucz API OpenAI")
 
 # Get API key from environment variables
 openai_api_key = os.getenv("OPENAI_API_KEY")
+
+# Allow user to input API key if not found in environment
+if not openai_api_key:
+    user_api_key = st.sidebar.text_input("Klucz API OpenAI", type="password")
+    if user_api_key:
+        openai_api_key = user_api_key
+        # Store the key temporarily in session state
+        st.session_state["OPENAI_API_KEY"] = user_api_key
+    else:
+        st.sidebar.warning("Wprowadź klucz API OpenAI, aby kontynuować.")
 
 # Test OpenAI API Key
 if openai_api_key:
     # Set the API key for OpenAI
     client = OpenAI(api_key=openai_api_key)
     
-    # Wrap with LangSmith for observability
+    # Wrap with LangSmith for observability (only if enabled)
     if LANGSMITH_ENABLED:
         client = wrap_openai(client)
 
@@ -166,42 +178,60 @@ if openai_api_key:
     try:
         # Fetch models to validate the key
         models = client.models.list()
-        st.success("API Key is valid!")
+        st.sidebar.success("Klucz API jest poprawny!")
     except Exception as e:
-        st.error(f"Invalid API Key: {e}")
+        st.sidebar.error(f"Nieprawidłowy klucz API: {e}")
+        st.stop()
 else:
-    st.error("OpenAI API Key not found in environment variables.")
+    st.sidebar.error("Klucz API OpenAI nie został podany. Wprowadź klucz, aby kontynuować.")
     st.stop()
 
 
 # * OpenAI Model Selection
 
-model_option = st.sidebar.selectbox("Choose OpenAI model", MODEL_LIST, index=0)
+model_option = st.sidebar.selectbox("Wybierz model OpenAI", MODEL_LIST, index=0)
 
 # Initialize the LLM with tracing
 llm = ChatOpenAI(model=model_option, api_key=openai_api_key)
 
 # Add observability UI elements to sidebar
-if LANGSMITH_ENABLED:
-    st.sidebar.subheader("LangSmith Observability")
+st.sidebar.subheader("Narzędzia obserwacyjne LangSmith")
+
+# Allow user to enable/disable LangSmith completely
+enable_langsmith = st.sidebar.checkbox("Włącz LangSmith", value=LANGSMITH_ENABLED)
+
+if enable_langsmith:
+    # Try to initialize LangSmith client if not already initialized
+    if not LANGSMITH_ENABLED:
+        try:
+            ls_client = Client()
+            LANGSMITH_ENABLED = True
+            st.sidebar.success("LangSmith został pomyślnie włączony!")
+        except Exception as e:
+            st.sidebar.error(f"Nie udało się włączyć LangSmith: {e}")
+            LANGSMITH_ENABLED = False
     
-    # Toggle tracing on/off
-    enable_tracing = st.sidebar.checkbox("Enable detailed tracing", value=True)
-    if enable_tracing:
-        os.environ["LANGSMITH_TRACING"] = "true"
-        st.sidebar.success("LangSmith tracing enabled")
-    else:
-        os.environ["LANGSMITH_TRACING"] = "false"
-        st.sidebar.warning("LangSmith tracing disabled")
-    
-    # Show current run ID
-    run_id = st.sidebar.empty()
-    trace_link = st.sidebar.empty()
-    
-    # Add link to LangSmith dashboard
-    st.sidebar.markdown("[Open LangSmith Dashboard](https://smith.langchain.com)")
+    # Only show detailed tracing options if LangSmith is successfully enabled
+    if LANGSMITH_ENABLED:
+        # Toggle tracing on/off - set to disabled by default
+        enable_tracing = st.sidebar.checkbox("Włącz szczegółowe śledzenie", value=False)
+        if enable_tracing:
+            os.environ["LANGSMITH_TRACING"] = "true"
+            st.sidebar.success("Śledzenie LangSmith włączone")
+        else:
+            os.environ["LANGSMITH_TRACING"] = "false"
+            st.sidebar.warning("Śledzenie LangSmith wyłączone")
+        
+        # Show current run ID
+        run_id = st.sidebar.empty()
+        trace_link = st.sidebar.empty()
+        
+        # Add link to LangSmith dashboard
+        st.sidebar.markdown("[Otwórz panel LangSmith](https://smith.langchain.com)")
 else:
-    st.sidebar.warning("LangSmith tracing disabled")
+    LANGSMITH_ENABLED = False
+    os.environ["LANGSMITH_TRACING"] = "false"
+    st.sidebar.info("LangSmith jest wyłączony. Zaznacz pole powyżej, aby włączyć funkcje śledzenia.")
 
 # ---------------------------
 # Application Mode Selection
