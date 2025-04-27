@@ -1,6 +1,5 @@
 Ogólny opis danych:
 - Zbiór danych zawiera badania efektywnoiści agentów ubezpieczeniowych w firmie. 
-- Dostępne kolumny: { df.columns.tolist() }
 
 Analiza danych:
 Page 1:
@@ -18,3 +17,7 @@ Page 3:
     - Title: "MULTI OBSERVATION STUDY PODSUMOWANIE MS-A"
     - Charts: "Brak wykresu"
     - Description: "Przedstaw tabelę z TOP 3 wartości "Podczynność" dla "Klasyfikacja"""
+Page 4:
+    - Title: "MULTI OBSERVATION STUDY PODSUMOWANIE MS-A"
+    - Charts: "heatmapa z procentowym udziałem NVA-O w kolumnie "Klasyfikacja"  w zależności od "Badanie" [oś x] i "Podczynność" [y]"
+    - Description: "Marnotrawienia czasu [NVA-O marnotrastwo oczywiste] z podziałem na "Badanie" i "Podczynność""

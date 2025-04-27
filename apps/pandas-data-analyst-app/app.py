@@ -80,7 +80,7 @@ except Exception as e:
 
 # * APP INPUTS ----
 
-MODEL_LIST =  ["gpt-4o", "gpt-4.1", "gpt-4.1-mini", "o4-mini"]
+MODEL_LIST =  ["o4-mini", "gpt-4o", "gpt-4.1", "gpt-4.1-mini"]
 TITLE = "Analityk danych Sigla"
 
 # Application modes
@@ -273,7 +273,7 @@ if st.session_state.current_file_name != "sample_data":
 
 
 uploaded_file = st.file_uploader(
-    "Choose a CSV or Excel file", type=["csv", "xlsx", "xls"]
+    "Wgraj plik CSV", type=["csv"]
 )
 if uploaded_file is not None:
     # Check if a new file has been uploaded
@@ -307,7 +307,7 @@ if uploaded_file is not None:
     st.subheader("Data Preview")
     st.dataframe(df.head())
 else:
-    st.info("Please upload a CSV or Excel file or use the sample data option to get started.")
+    st.info("Wgraj plik CSV lub użyj opcji przykładowych danych.")
     st.stop()
 
 # ---------------------------
@@ -539,7 +539,7 @@ Page 1:
                 config_file_path = temp_file.name
     elif config_option == "Upload configuration file":
         config_file = st.file_uploader(
-            "Upload configuration file (YAML, JSON, or TXT)",
+            "Wgraj plik konfiguracyjny (YAML, JSON, lub TXT)",
             type=["yaml", "yml", "json", "txt"],
             key="config_upload"
         )
