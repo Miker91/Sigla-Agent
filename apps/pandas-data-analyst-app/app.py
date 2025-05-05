@@ -27,6 +27,7 @@ from langchain_openai import ChatOpenAI
 from langsmith import Client, traceable
 from langsmith.wrappers import wrap_openai
 import uuid
+import pathlib
 
 # Add project root to Python path
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
@@ -58,7 +59,10 @@ possible_paths = [
 dotenv_path = next((path for path in possible_paths if os.path.exists(path)), 
                    os.path.join(os.path.dirname(__file__), '..', '..', '.env'))  # Default if none found
 
-load_dotenv(dotenv_path)
+try:
+    load_dotenv(dotenv_path)
+except Exception as e:
+    print(f"Error loading .env file: {e}")
 
 # Check if LANGSMITH_API_KEY is set, otherwise try to get from environment
 if not os.getenv("LANGSMITH_API_KEY"):
@@ -99,6 +103,148 @@ st.title(TITLE)
 # ---------------------------
 # Utility Functions
 # ---------------------------
+
+def save_conversation(conversation_name=None):
+    """Save the current conversation to a JSON file"""
+    if not conversation_name:
+        # Generate a default name using timestamp if none provided
+        conversation_name = f"Conversation {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    
+    # Create a conversations directory if it doesn't exist
+    conversations_dir = os.path.join(os.path.dirname(__file__), "conversations")
+    os.makedirs(conversations_dir, exist_ok=True)
+    
+    # Create a unique ID for this conversation
+    conversation_id = datetime.now().strftime('%Y%m%d_%H%M%S')
+    
+    # Save data if available
+    data_file_path = None
+    if "data_history" in st.session_state and st.session_state.data_history.get("raw") is not None:
+        data_dir = os.path.join(conversations_dir, "data")
+        os.makedirs(data_dir, exist_ok=True)
+        
+        # Save the raw dataframe to a CSV file
+        data_file_name = f"data_{conversation_id}.csv"
+        data_file_path = os.path.join(data_dir, data_file_name)
+        try:
+            st.session_state.data_history["raw"].to_csv(data_file_path, index=False)
+        except Exception as e:
+            st.warning(f"Could not save data file: {e}")
+            data_file_path = None
+    
+    # Prepare conversation data
+    conversation_data = {
+        "name": conversation_name,
+        "id": conversation_id,
+        "date": datetime.now().isoformat(),
+        "app_mode": st.session_state.get("app_mode", "Analiza i czatowanie z danymi"),
+        "data_chat_history": st.session_state.get("data_chat_history", []),
+        "unified_chat_history": st.session_state.get("unified_chat_history", []),
+        "current_file_name": st.session_state.get("current_file_name", None),
+        "data_file_path": data_file_path
+    }
+    
+    # Create a filename safe version of the conversation name
+    safe_name = "".join([c if c.isalnum() else "_" for c in conversation_name])
+    filename = f"{safe_name}_{conversation_id}.json"
+    filepath = os.path.join(conversations_dir, filename)
+    
+    # Save to JSON file
+    with open(filepath, 'w', encoding='utf-8') as f:
+        json.dump(conversation_data, f, ensure_ascii=False, indent=2)
+    
+    return filename
+
+def load_conversation(filepath):
+    """Load a conversation from a JSON file"""
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            conversation_data = json.load(f)
+        
+        # Restore conversation state
+        st.session_state["app_mode"] = conversation_data.get("app_mode", "Analiza i czatowanie z danymi") 
+        st.session_state["data_chat_history"] = conversation_data.get("data_chat_history", [])
+        st.session_state["unified_chat_history"] = conversation_data.get("unified_chat_history", [])
+        st.session_state["loaded_conversation_info"] = {
+            "name": conversation_data.get("name", "Wczytana konwersacja"),
+            "date": conversation_data.get("date", ""),
+            "id": conversation_data.get("id", "")
+        }
+        
+        # Load the data file if available
+        data_file_path = conversation_data.get("data_file_path")
+        if data_file_path and os.path.exists(data_file_path):
+            try:
+                df_loaded = pd.read_csv(data_file_path)
+                
+                # Initialize data history if needed
+                if "data_history" not in st.session_state:
+                    st.session_state.data_history = {
+                        "raw": None,
+                        "cleaned": None,
+                        "current": None
+                    }
+                
+                # Set the data in the session state
+                st.session_state.data_history["raw"] = df_loaded
+                st.session_state.data_history["current"] = df_loaded
+                st.session_state.current_file_name = conversation_data.get("current_file_name", "loaded_conversation")
+                
+            except Exception as e:
+                st.warning(f"Could not load data file: {e}")
+        
+        return True
+    except Exception as e:
+        st.error(f"Error loading conversation: {e}")
+        return False
+
+def get_saved_conversations():
+    """Get a list of all saved conversations"""
+    conversations_dir = os.path.join(os.path.dirname(__file__), "conversations")
+    os.makedirs(conversations_dir, exist_ok=True)
+    
+    conversations = []
+    for filename in os.listdir(conversations_dir):
+        if filename.endswith('.json'):
+            filepath = os.path.join(conversations_dir, filename)
+            try:
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    conversations.append({
+                        "name": data.get("name", filename),
+                        "date": data.get("date", ""),
+                        "filename": filename,
+                        "filepath": filepath
+                    })
+            except Exception:
+                # Skip files that can't be parsed
+                pass
+    
+    # Sort by date (newest first)
+    conversations.sort(key=lambda x: x.get("date", ""), reverse=True)
+    return conversations
+
+def delete_conversation(filepath):
+    """Delete a saved conversation file"""
+    try:
+        # Check if the file exists
+        if os.path.exists(filepath):
+            # Get the conversation data to find the data file
+            with open(filepath, 'r', encoding='utf-8') as f:
+                conversation_data = json.load(f)
+            
+            # Delete the data file if it exists
+            data_file_path = conversation_data.get("data_file_path")
+            if data_file_path and os.path.exists(data_file_path):
+                os.remove(data_file_path)
+            
+            # Delete the conversation file
+            os.remove(filepath)
+            return True
+        return False
+    except Exception as e:
+        st.error(f"Error deleting conversation: {e}")
+        return False
 
 def log_action(action, metadata=None, run_id=None):
     """Log an action to LangSmith for observability"""
@@ -234,10 +380,70 @@ else:
     st.sidebar.info("LangSmith jest wyłączony. Zaznacz pole powyżej, aby włączyć funkcje śledzenia.")
 
 # ---------------------------
-# Application Mode Selection
+# Previous Conversations Section
 # ---------------------------
 
-app_mode = st.sidebar.selectbox("Wybierz tryb aplikacji", APP_MODES)
+st.sidebar.markdown("---")
+st.sidebar.subheader("Poprzednie konwersacje")
+
+# Add button to clear current conversation
+if "loaded_conversation_info" in st.session_state:
+    if st.sidebar.button("Rozpocznij nową konwersację"):
+        # Clear conversation info
+        st.session_state.pop("loaded_conversation_info", None)
+        st.session_state.data_chat_history = []
+        st.session_state.unified_chat_history = []
+        st.rerun()
+
+# Add conversation saving UI in an expander
+with st.sidebar.expander("Zapisz bieżącą konwersację"):
+    with st.form(key="save_conversation_form"):
+        conversation_name = st.text_input(
+            "Nazwa konwersacji", 
+            value=f"Konwersacja {datetime.now().strftime('%Y-%m-%d')}"
+        )
+        save_button = st.form_submit_button("Zapisz")
+        
+        if save_button and conversation_name:
+            filename = save_conversation(conversation_name)
+            st.success(f"Konwersacja zapisana: {conversation_name}")
+
+# Load previous conversations
+saved_conversations = get_saved_conversations()
+if saved_conversations:
+    conversation_names = ["Wybierz konwersację..."] + [f"{c['name']} ({c['date'][:10]})" for c in saved_conversations]
+    selected_conversation = st.sidebar.selectbox("Wczytaj poprzednią konwersację", conversation_names)
+    
+    if selected_conversation != "Wybierz konwersację...":
+        selected_index = conversation_names.index(selected_conversation) - 1  # Adjust for the initial instruction
+        
+        col1, col2 = st.sidebar.columns(2)
+        with col1:
+            if st.button("Wczytaj"):
+                if load_conversation(saved_conversations[selected_index]["filepath"]):
+                    st.sidebar.success(f"Wczytano: {saved_conversations[selected_index]['name']}")
+                    st.rerun()  # Rerun the app to display the loaded conversation
+        
+        with col2:
+            if st.button("Usuń", type="secondary"):
+                if delete_conversation(saved_conversations[selected_index]["filepath"]):
+                    st.sidebar.success("Konwersacja usunięta!")
+                    st.rerun()  # Rerun to refresh the list
+else:
+    st.sidebar.info("Nie znaleziono zapisanych konwersacji.")
+
+st.sidebar.markdown("---")
+
+# ---------------------------
+# Main Application Logic Based on Selected Mode
+# ---------------------------
+
+# App mode selection (main content)
+app_mode = st.sidebar.radio("Wybierz tryb aplikacji", APP_MODES)
+
+# Store the app mode in session state
+if "app_mode" not in st.session_state:
+    st.session_state.app_mode = app_mode
 
 # ---------------------------
 # File Upload and Data Preview
@@ -628,10 +834,22 @@ Page 1:
             st.warning("No analysis pages were found in the configuration.")
 
 # ---------------------------
+# Conversation Management Functions
+# ---------------------------
+
+# ---------------------------
 # Main Application Logic Based on Selected Mode
 # ---------------------------
 
 if app_mode == "Analiza i czatowanie z danymi":
+    # Show loaded conversation info if available
+    if "loaded_conversation_info" in st.session_state:
+        info = st.session_state["loaded_conversation_info"]
+        file_info = ""
+        if "current_file_name" in st.session_state and st.session_state.current_file_name:
+            file_info = f" - Plik: {st.session_state.current_file_name}"
+        st.info(f"Wczytana konwersacja: {info['name']} (utworzona {info['date'][:10]}){file_info}")
+    
     # Display example questions
     with st.expander("Przykładowe pytania", expanded=False):
         st.write(
@@ -834,5 +1052,13 @@ if app_mode == "Analiza i czatowanie z danymi":
                         st.dataframe(response_content["dataframe"])
 
 elif app_mode == "Analiza z pliku konfiguracyjnego":
+    # Show loaded conversation info if available
+    if "loaded_conversation_info" in st.session_state:
+        info = st.session_state["loaded_conversation_info"]
+        file_info = ""
+        if "current_file_name" in st.session_state and st.session_state.current_file_name:
+            file_info = f" - Plik: {st.session_state.current_file_name}"
+        st.info(f"Wczytana konwersacja: {info['name']} (utworzona {info['date'][:10]}){file_info}")
+    
     # Display configuration-based analysis interface
     display_config_analysis()
