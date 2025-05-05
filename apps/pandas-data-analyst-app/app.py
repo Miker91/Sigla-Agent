@@ -104,6 +104,60 @@ st.title(TITLE)
 # Utility Functions
 # ---------------------------
 
+def prepare_for_json(obj):
+    """Prepare objects for JSON serialization, handling non-serializable types"""
+    if isinstance(obj, dict):
+        return {k: prepare_for_json(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [prepare_for_json(item) for item in obj]
+    elif hasattr(obj, 'to_json'):  # Handle Plotly figures
+        try:
+            return {'__plotly_figure__': True, 'data': json.loads(obj.to_json())}
+        except:
+            return "PLOTLY_FIGURE_CONVERSION_FAILED"
+    elif hasattr(obj, 'to_dict'):  # Handle pandas DataFrames
+        try:
+            return {'__pandas_dataframe__': True, 'data': obj.to_dict()}
+        except:
+            return "PANDAS_DATAFRAME_CONVERSION_FAILED"
+    elif pd.isna(obj):  # Handle NaN and None
+        return None
+    elif isinstance(obj, (pd.Timestamp, datetime)):
+        return obj.isoformat()
+    elif hasattr(obj, "__dict__"):  # Generic objects
+        try:
+            return {'__python_object__': obj.__class__.__name__, 'data': str(obj)}
+        except:
+            return "OBJECT_CONVERSION_FAILED"
+    else:
+        return obj
+
+def restore_from_json(obj):
+    """Restore special objects from JSON representation"""
+    if isinstance(obj, dict):
+        # Handle special object types
+        if '__plotly_figure__' in obj:
+            try:
+                import plotly.io as pio
+                return pio.from_json(json.dumps(obj['data']))
+            except:
+                return "PLOTLY_FIGURE_RESTORATION_FAILED"
+        elif '__pandas_dataframe__' in obj:
+            try:
+                return pd.DataFrame.from_dict(obj['data'])
+            except:
+                return "PANDAS_DATAFRAME_RESTORATION_FAILED"
+        elif '__python_object__' in obj:
+            # Just return a string representation for custom objects
+            return obj['data']
+        else:
+            # Regular dictionary
+            return {k: restore_from_json(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [restore_from_json(item) for item in obj]
+    else:
+        return obj
+
 def save_conversation(conversation_name=None):
     """Save the current conversation to a JSON file"""
     if not conversation_name:
@@ -132,15 +186,24 @@ def save_conversation(conversation_name=None):
             st.warning(f"Could not save data file: {e}")
             data_file_path = None
     
+    # Get the current file name with proper handling
+    current_file_name = None
+    if "current_file_name" in st.session_state and st.session_state.current_file_name:
+        current_file_name = st.session_state.current_file_name
+    
+    # Prepare conversation data with proper handling for non-serializable objects
+    data_chat_history = prepare_for_json(st.session_state.get("data_chat_history", []))
+    unified_chat_history = prepare_for_json(st.session_state.get("unified_chat_history", []))
+    
     # Prepare conversation data
     conversation_data = {
         "name": conversation_name,
         "id": conversation_id,
         "date": datetime.now().isoformat(),
         "app_mode": st.session_state.get("app_mode", "Analiza i czatowanie z danymi"),
-        "data_chat_history": st.session_state.get("data_chat_history", []),
-        "unified_chat_history": st.session_state.get("unified_chat_history", []),
-        "current_file_name": st.session_state.get("current_file_name", None),
+        "data_chat_history": data_chat_history,
+        "unified_chat_history": unified_chat_history,
+        "current_file_name": current_file_name,
         "data_file_path": data_file_path
     }
     
@@ -150,16 +213,47 @@ def save_conversation(conversation_name=None):
     filepath = os.path.join(conversations_dir, filename)
     
     # Save to JSON file
-    with open(filepath, 'w', encoding='utf-8') as f:
-        json.dump(conversation_data, f, ensure_ascii=False, indent=2)
-    
-    return filename
+    try:
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(conversation_data, f, ensure_ascii=False, indent=2)
+        return filename
+    except TypeError as e:
+        st.error(f"Błąd serializacji: {e}. Niektóre elementy konwersacji nie mogły zostać zapisane.")
+        # Attempt simplified save by removing problematic elements
+        try:
+            st.warning("Próbuję zapisać uproszczoną wersję konwersacji bez elementów graficznych.")
+            simplified_data = {
+                "name": conversation_name,
+                "id": conversation_id,
+                "date": datetime.now().isoformat(),
+                "app_mode": st.session_state.get("app_mode", "Analiza i czatowanie z danymi"),
+                "data_chat_history": [],  # Simplified
+                "unified_chat_history": [],  # Simplified
+                "current_file_name": current_file_name,
+                "data_file_path": data_file_path
+            }
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(simplified_data, f, ensure_ascii=False, indent=2)
+            return filename
+        except Exception as e2:
+            st.error(f"Nie udało się zapisać nawet uproszczonej wersji: {e2}")
+            return None
+    except Exception as e:
+        st.error(f"Błąd zapisu: {e}")
+        return None
 
 def load_conversation(filepath):
     """Load a conversation from a JSON file"""
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
             conversation_data = json.load(f)
+        
+        # Restore special objects in conversation data
+        if "data_chat_history" in conversation_data:
+            conversation_data["data_chat_history"] = restore_from_json(conversation_data["data_chat_history"])
+        
+        if "unified_chat_history" in conversation_data:
+            conversation_data["unified_chat_history"] = restore_from_json(conversation_data["unified_chat_history"])
         
         # Restore conversation state
         st.session_state["app_mode"] = conversation_data.get("app_mode", "Analiza i czatowanie z danymi") 
@@ -168,8 +262,15 @@ def load_conversation(filepath):
         st.session_state["loaded_conversation_info"] = {
             "name": conversation_data.get("name", "Wczytana konwersacja"),
             "date": conversation_data.get("date", ""),
-            "id": conversation_data.get("id", "")
+            "id": conversation_data.get("id", ""),
+            "file_loaded": False  # Flag to track if the data file has been loaded
         }
+        
+        # Store source file info from the conversation
+        st.session_state["conversation_source_file"] = conversation_data.get("current_file_name")
+        
+        # Flag to indicate pending file load
+        st.session_state["pending_conversation"] = True
         
         # Load the data file if available
         data_file_path = conversation_data.get("data_file_path")
@@ -189,6 +290,10 @@ def load_conversation(filepath):
                 st.session_state.data_history["raw"] = df_loaded
                 st.session_state.data_history["current"] = df_loaded
                 st.session_state.current_file_name = conversation_data.get("current_file_name", "loaded_conversation")
+                
+                # Mark as loaded
+                st.session_state["loaded_conversation_info"]["file_loaded"] = True
+                st.session_state["pending_conversation"] = False
                 
             except Exception as e:
                 st.warning(f"Could not load data file: {e}")
@@ -453,6 +558,14 @@ st.markdown("""
 Wgraj plik CSV lub Excel z danymi do analizy lub użyj przykładowych danych.  
 """)
 
+# Show message if pending conversation
+if "pending_conversation" in st.session_state and st.session_state["pending_conversation"]:
+    if "conversation_source_file" in st.session_state and st.session_state["conversation_source_file"]:
+        original_file = st.session_state["conversation_source_file"]
+        st.warning(f"⚠️ Wczytano konwersację, ale wymaga ona pliku danych. Oryginalny plik to: {original_file}. Wgraj ten sam lub podobny plik danych.")
+    else:
+        st.warning("⚠️ Wczytano konwersację, ale wymaga ona pliku danych. Proszę wgraj plik CSV.")
+
 # Add file tracking to detect changes
 if "current_file_name" not in st.session_state:
     st.session_state.current_file_name = None
@@ -479,31 +592,42 @@ if st.session_state.current_file_name != "sample_data":
 
 
 uploaded_file = st.file_uploader(
-    "Wgraj plik CSV", type=["csv"]
+    "Wgraj plik CSV", type=["csv"], key="file_uploader"
 )
 if uploaded_file is not None:
     # Check if a new file has been uploaded
     if st.session_state.current_file_name != uploaded_file.name:
-        # Reset session state for new data
-        st.session_state.data_history = {
-            "raw": None,
-            "cleaned": None, 
-            "engineered": None,
-            "current": None,
-            "cleaning_explanation": None,
-            "engineering_explanation": None,
-        }
-        st.session_state.config_analysis_results = None
-        st.session_state.config_analyzed = False
-        st.session_state.data_chat_history = []
-        st.session_state.plots = []
-        st.session_state.dataframes = []
-        if "langchain_messages" in st.session_state:
-            st.session_state.langchain_messages = []
-        # Ensure we reset any other relevant session state variables
-        if "is_followup" in st.session_state:
-            st.session_state.is_followup = False
+        # Reset session state for new data if no pending conversation
+        if not st.session_state.get("pending_conversation", False):
+            st.session_state.data_history = {
+                "raw": None,
+                "cleaned": None, 
+                "engineered": None,
+                "current": None,
+                "cleaning_explanation": None,
+                "engineering_explanation": None,
+            }
+            st.session_state.config_analysis_results = None
+            st.session_state.config_analyzed = False
+            st.session_state.data_chat_history = []
+            st.session_state.plots = []
+            st.session_state.dataframes = []
+            if "langchain_messages" in st.session_state:
+                st.session_state.langchain_messages = []
+            # Ensure we reset any other relevant session state variables
+            if "is_followup" in st.session_state:
+                st.session_state.is_followup = False
+        
+        # Update the current file name
         st.session_state.current_file_name = uploaded_file.name
+        
+        # If there was a pending conversation, mark it as no longer pending
+        if st.session_state.get("pending_conversation", False):
+            st.session_state["pending_conversation"] = False
+            if "loaded_conversation_info" in st.session_state:
+                st.session_state["loaded_conversation_info"]["file_loaded"] = True
+            st.success("✅ Plik wczytany pomyślnie! Konwersacja jest teraz dostępna.")
+            st.rerun()
     
     if uploaded_file.name.endswith(".csv"):
         df = pd.read_csv(uploaded_file)
@@ -513,6 +637,12 @@ if uploaded_file is not None:
     st.subheader("Data Preview")
     st.dataframe(df.head())
 else:
+    # Clear loaded conversation if file was removed and there was a pending conversation
+    if st.session_state.get("pending_conversation", False):
+        st.session_state["pending_conversation"] = False
+        if "loaded_conversation_info" in st.session_state:
+            st.info("Konwersacja została wczytana, ale wymaga pliku danych aby się wyświetlić.")
+    
     st.info("Wgraj plik CSV lub użyj opcji przykładowych danych.")
     st.stop()
 
@@ -834,10 +964,6 @@ Page 1:
             st.warning("No analysis pages were found in the configuration.")
 
 # ---------------------------
-# Conversation Management Functions
-# ---------------------------
-
-# ---------------------------
 # Main Application Logic Based on Selected Mode
 # ---------------------------
 
@@ -848,208 +974,215 @@ if app_mode == "Analiza i czatowanie z danymi":
         file_info = ""
         if "current_file_name" in st.session_state and st.session_state.current_file_name:
             file_info = f" - Plik: {st.session_state.current_file_name}"
-        st.info(f"Wczytana konwersacja: {info['name']} (utworzona {info['date'][:10]}){file_info}")
-    
-    # Display example questions
-    with st.expander("Przykładowe pytania", expanded=False):
-        st.write(
-            """
-            Przykładowe pytania:
-            - Wykres kołowy przedstawiający procentowy udział wartości w kolumnie "Klasyfikacja".
-            - Tabela z TOP 3 wartości "Podczynność" dla "Klasyfikacja"
-            - Skumulowany wykres słupkowy poziomy (stacked bar chart). Wykres na osi y prezentuje wartości z kolumny "Badanie". Na osi x prezentuje procentowo wartości z kolumny "Klasyfikacja". Przedstawia on udział trzech Klasyfikacji "Klasyfikacja" (oznaczonych kolorami: żółty, czerwony i zielony) w łącznej wartości 100% dla różnych Badań (kolumna "Badanie"). 
-            """
-        )
-    
-    # Initialize unified chat history
-    if "unified_chat_history" not in st.session_state:
-        st.session_state.unified_chat_history = []
         
-    # Display unified chat history
-    for msg in st.session_state.unified_chat_history:
-        if msg["type"] == "user":
-            with st.chat_message("human"):
-                st.write(msg["content"])
+        # Show different message based on file load status
+        if info.get("file_loaded", False):
+            st.info(f"Wczytana konwersacja: {info['name']} (utworzona {info['date'][:10]}){file_info}")
         else:
-            with st.chat_message("assistant"):
-                # Handle different response types
-                if "text" in msg["content"]:
-                    st.write(msg["content"]["text"])
-                
-                # Display any plot if available
-                if "plot" in msg["content"] and msg["content"]["plot"] is not None:
-                    st.plotly_chart(msg["content"]["plot"])
-                
-                # Display any dataframe if available
-                if "dataframe" in msg["content"] and msg["content"]["dataframe"] is not None:
-                    st.dataframe(msg["content"]["dataframe"])
-                    
-                # Display follow-up suggestions if available
-                if "followups" in msg["content"] and msg["content"]["followups"]:
-                    followups = msg["content"]["followups"]
-                    if followups and isinstance(followups, list) and len(followups) > 0:
-                        with st.expander("Sugerowane pytania uzupełniające"):
-                            for q in followups:
-                                st.markdown(f"- {q.strip()}")
+            st.warning(f"Wczytana konwersacja: {info['name']} (utworzona {info['date'][:10]}){file_info} - Wymagane ponowne wczytanie pliku danych.")
     
-    # Unified chat input
-    if user_query := st.chat_input("Zapytaj o dane lub poproś o analizę:"):
-        # Store the original data if this is first question
-        if st.session_state.data_history["raw"] is None:
-            st.session_state.data_history["raw"] = df.copy()
-            st.session_state.data_history["current"] = df.copy()
+    # Display example questions only if conversation is loaded correctly
+    if not st.session_state.get("pending_conversation", False):
+        # Display example questions
+        with st.expander("Przykładowe pytania", expanded=False):
+            st.write(
+                """
+                Przykładowe pytania:
+                - Wykres kołowy przedstawiający procentowy udział wartości w kolumnie "Klasyfikacja".
+                - Tabela z TOP 3 wartości "Podczynność" dla "Klasyfikacja"
+                - Skumulowany wykres słupkowy poziomy (stacked bar chart). Wykres na osi y prezentuje wartości z kolumny "Badanie". Na osi x prezentuje procentowo wartości z kolumny "Klasyfikacja". Przedstawia on udział trzech Klasyfikacji "Klasyfikacja" (oznaczonych kolorami: żółty, czerwony i zielony) w łącznej wartości 100% dla różnych Badań (kolumna "Badanie"). 
+                """
+            )
         
-        # Add user message to history
-        st.session_state.unified_chat_history.append({
-            "type": "user",
-            "content": user_query
-        })
+        # Initialize unified chat history
+        if "unified_chat_history" not in st.session_state:
+            st.session_state.unified_chat_history = []
         
-        # Display user message
-        with st.chat_message("human"):
-            st.write(user_query)
-            
-        # Analyze query to determine the best agent to handle it
-        with st.spinner("Analyzing your question..."):
-            # Determine input data: use last generated table for follow-ups if requested
-            is_followup_query = False
-            input_data_for_agent = None
-            # Simple check for follow-up phrases (can be improved with more robust NLP)
-            followup_phrases = ["do tej tabeli", "do powyższej tabeli", "w tej tabeli", "na tej tabeli", "z tej tabeli", "z poprzedniej tabeli", "z powyższej tabeli"]
-            if st.session_state.last_generated_dataframe is not None and any(phrase in user_query.lower() for phrase in followup_phrases):
-                is_followup_query = True
-                input_data_for_agent = st.session_state.last_generated_dataframe
-                # Keep last_generated_dataframe for this query, it might be replaced by the result
+        # Display unified chat history
+        for msg in st.session_state.unified_chat_history:
+            if msg["type"] == "user":
+                with st.chat_message("human"):
+                    st.write(msg["content"])
             else:
-                # Default to current data from history
-                input_data_for_agent = st.session_state.data_history["current"]
-                # If it's not a follow-up query targeting the last table, clear the context
-                st.session_state.last_generated_dataframe = None
+                with st.chat_message("assistant"):
+                    # Handle different response types
+                    if "text" in msg["content"]:
+                        st.write(msg["content"]["text"])
+                    
+                    # Display any plot if available
+                    if "plot" in msg["content"] and msg["content"]["plot"] is not None:
+                        st.plotly_chart(msg["content"]["plot"])
+                    
+                    # Display any dataframe if available
+                    if "dataframe" in msg["content"] and msg["content"]["dataframe"] is not None:
+                        st.dataframe(msg["content"]["dataframe"])
+                        
+                    # Display follow-up suggestions if available
+                    if "followups" in msg["content"] and msg["content"]["followups"]:
+                        followups = msg["content"]["followups"]
+                        if followups and isinstance(followups, list) and len(followups) > 0:
+                            with st.expander("Sugerowane pytania uzupełniające"):
+                                for q in followups:
+                                    st.markdown(f"- {q.strip()}")
+        
+        # Unified chat input
+        if user_query := st.chat_input("Zapytaj o dane lub poproś o analizę:"):
+            # Store the original data if this is first question
+            if st.session_state.data_history["raw"] is None:
+                st.session_state.data_history["raw"] = df.copy()
+                st.session_state.data_history["current"] = df.copy()
+            
+            # Add user message to history
+            st.session_state.unified_chat_history.append({
+                "type": "user",
+                "content": user_query
+            })
+            
+            # Display user message
+            with st.chat_message("human"):
+                st.write(user_query)
+            
+            # Analyze query to determine the best agent to handle it
+            with st.spinner("Analyzing your question..."):
+                # Determine input data: use last generated table for follow-ups if requested
+                is_followup_query = False
+                input_data_for_agent = None
+                # Simple check for follow-up phrases (can be improved with more robust NLP)
+                followup_phrases = ["do tej tabeli", "do powyższej tabeli", "w tej tabeli", "na tej tabeli", "z tej tabeli", "z poprzedniej tabeli", "z powyższej tabeli"]
+                if st.session_state.last_generated_dataframe is not None and any(phrase in user_query.lower() for phrase in followup_phrases):
+                    is_followup_query = True
+                    input_data_for_agent = st.session_state.last_generated_dataframe
+                    # Keep last_generated_dataframe for this query, it might be replaced by the result
+                else:
+                    # Default to current data from history
+                    input_data_for_agent = st.session_state.data_history["current"]
+                    # If it's not a follow-up query targeting the last table, clear the context
+                    st.session_state.last_generated_dataframe = None
 
-            # Get current data state (used primarily by chat agent or if no specific follow-up)
-            current_data = st.session_state.data_history["current"] 
-            
-            # Query analysis to determine routing
-            agent_routing_prompt = f"""
-            Analyze this query and determine if it's better handled by:
-            1. A general data chat agent (for simple questions about the data, explaining columns, etc.)
-            2. A data analysis agent (for calculations, statistics, visualizations, data transformations)
-            
-            User query: "{user_query}"
-            
-            Return ONLY one of these values:
-            - "chat" (for general data chat questions)
-            - "analysis" (for data analysis operations)
-            """
-            
-            # Determine which agent to use
-            routing_response = llm.invoke(agent_routing_prompt).content.strip().lower()
-            agent_type = "chat" if "chat" in routing_response else "analysis"
-            
-            # Process with appropriate agent
-            if agent_type == "chat":
-                # Chat agent usually operates on the main current data unless specifically asked otherwise
-                # Clear any previous table context when switching to general chat
-                st.session_state.last_generated_dataframe = None 
+                # Get current data state (used primarily by chat agent or if no specific follow-up)
+                current_data = st.session_state.data_history["current"] 
                 
-                # Get analysis results if available
-                analysis_results = st.session_state.config_analysis_results if st.session_state.config_analyzed else {}
+                # Query analysis to determine routing
+                agent_routing_prompt = f"""
+                Analyze this query and determine if it's better handled by:
+                1. A general data chat agent (for simple questions about the data, explaining columns, etc.)
+                2. A data analysis agent (for calculations, statistics, visualizations, data transformations)
                 
-                # Process with DataChatAgent using the determined input data (or default if context cleared)
-                data_chat_agent.invoke_agent(
-                    data_raw=df, # Keep raw as original df
-                    data_cleaned=input_data_for_agent if input_data_for_agent is not None else current_data, # Use selected data, fallback to current
-                    analysis_results=analysis_results,
-                    user_query=user_query
-                )
+                User query: "{user_query}"
                 
-                # Get the response
-                chat_response = data_chat_agent.get_response()
+                Return ONLY one of these values:
+                - "chat" (for general data chat questions)
+                - "analysis" (for data analysis operations)
+                """
                 
-                # Format response for unified history
-                response_content = {
-                    "text": chat_response["answer"],
-                    "followups": chat_response.get("suggested_followups", [])
-                }
+                # Determine which agent to use
+                routing_response = llm.invoke(agent_routing_prompt).content.strip().lower()
+                agent_type = "chat" if "chat" in routing_response else "analysis"
                 
-                # Add to unified history
-                st.session_state.unified_chat_history.append({
-                    "type": "assistant",
-                    "content": response_content
-                })
-                
-                # Display the response
-                with st.chat_message("assistant"):
-                    st.write(response_content["text"])
+                # Process with appropriate agent
+                if agent_type == "chat":
+                    # Chat agent usually operates on the main current data unless specifically asked otherwise
+                    # Clear any previous table context when switching to general chat
+                    st.session_state.last_generated_dataframe = None 
                     
-                    # Display follow-up suggestions
-                    if response_content["followups"]:
-                        with st.expander("Sugerowane pytania uzupełniające"):
-                            for q in response_content["followups"]:
-                                st.markdown(f"- {q.strip()}")
-            else:
-                # Process with PandasDataAnalyst using the determined input data
-                pandas_data_analyst.invoke_agent(
-                    user_instructions=user_query,
-                    data_raw=input_data_for_agent,
-                )
-                result = pandas_data_analyst.get_response()
-                
-                # Initialize response content
-                response_content = {
-                    "text": "Wyniki analizy:",
-                    "plot": None,
-                    "dataframe": None
-                }
-                
-                # Process result based on routing decision
-                routing = result.get("routing_preprocessor_decision")
-                
-                if routing == "chart" and not result.get("plotly_error", False):
-                    # Process chart result
-                    plot_data = result.get("plotly_graph")
-                    if plot_data:
-                        # Convert dictionary to JSON string if needed
-                        if isinstance(plot_data, dict):
-                            plot_json = json.dumps(plot_data)
-                        else:
-                            plot_json = plot_data
-                        plot_obj = pio.from_json(plot_json)
+                    # Get analysis results if available
+                    analysis_results = st.session_state.config_analysis_results if st.session_state.config_analyzed else {}
+                    
+                    # Process with DataChatAgent using the determined input data (or default if context cleared)
+                    data_chat_agent.invoke_agent(
+                        data_raw=df, # Keep raw as original df
+                        data_cleaned=input_data_for_agent if input_data_for_agent is not None else current_data, # Use selected data, fallback to current
+                        analysis_results=analysis_results,
+                        user_query=user_query
+                    )
+                    
+                    # Get the response
+                    chat_response = data_chat_agent.get_response()
+                    
+                    # Format response for unified history
+                    response_content = {
+                        "text": chat_response["answer"],
+                        "followups": chat_response.get("suggested_followups", [])
+                    }
+                    
+                    # Add to unified history
+                    st.session_state.unified_chat_history.append({
+                        "type": "assistant",
+                        "content": response_content
+                    })
+                    
+                    # Display the response
+                    with st.chat_message("assistant"):
+                        st.write(response_content["text"])
                         
-                        # Update response content
-                        response_content["text"] = "Oto wizualizacja na podstawie Twojego zapytania."
-                        response_content["plot"] = plot_obj
-                
-                elif routing == "table":
-                    # Process table result
-                    data_wrangled = result.get("data_wrangled")
-                    if data_wrangled is not None:
-                        # Ensure data_wrangled is a DataFrame
-                        if not isinstance(data_wrangled, pd.DataFrame):
-                            data_wrangled = pd.DataFrame(data_wrangled)
+                        # Display follow-up suggestions
+                        if response_content["followups"]:
+                            with st.expander("Sugerowane pytania uzupełniające"):
+                                for q in response_content["followups"]:
+                                    st.markdown(f"- {q.strip()}")
+                else:
+                    # Process with PandasDataAnalyst using the determined input data
+                    pandas_data_analyst.invoke_agent(
+                        user_instructions=user_query,
+                        data_raw=input_data_for_agent,
+                    )
+                    result = pandas_data_analyst.get_response()
+                    
+                    # Initialize response content
+                    response_content = {
+                        "text": "Wyniki analizy:",
+                        "plot": None,
+                        "dataframe": None
+                    }
+                    
+                    # Process result based on routing decision
+                    routing = result.get("routing_preprocessor_decision")
+                    
+                    if routing == "chart" and not result.get("plotly_error", False):
+                        # Process chart result
+                        plot_data = result.get("plotly_graph")
+                        if plot_data:
+                            # Convert dictionary to JSON string if needed
+                            if isinstance(plot_data, dict):
+                                plot_json = json.dumps(plot_data)
+                            else:
+                                plot_json = plot_data
+                            plot_obj = pio.from_json(plot_json)
                             
-                        # Update response content
-                        response_content["text"] = "Oto tabela danych na podstawie Twojego zapytania."
-                        response_content["dataframe"] = data_wrangled
-                        
-                        # Store this dataframe as the new context for potential follow-ups
-                        st.session_state.last_generated_dataframe = data_wrangled.copy()
-                
-                # Add to unified history
-                st.session_state.unified_chat_history.append({
-                    "type": "assistant",
-                    "content": response_content
-                })
-                
-                # Display the response
-                with st.chat_message("assistant"):
-                    st.write(response_content["text"])
+                            # Update response content
+                            response_content["text"] = "Oto wizualizacja na podstawie Twojego zapytania."
+                            response_content["plot"] = plot_obj
                     
-                    if response_content["plot"] is not None:
-                        st.plotly_chart(response_content["plot"])
+                    elif routing == "table":
+                        # Process table result
+                        data_wrangled = result.get("data_wrangled")
+                        if data_wrangled is not None:
+                            # Ensure data_wrangled is a DataFrame
+                            if not isinstance(data_wrangled, pd.DataFrame):
+                                data_wrangled = pd.DataFrame(data_wrangled)
+                                
+                            # Update response content
+                            response_content["text"] = "Oto tabela danych na podstawie Twojego zapytania."
+                            response_content["dataframe"] = data_wrangled
+                            
+                            # Store this dataframe as the new context for potential follow-ups
+                            st.session_state.last_generated_dataframe = data_wrangled.copy()
+                    
+                    # Add to unified history
+                    st.session_state.unified_chat_history.append({
+                        "type": "assistant",
+                        "content": response_content
+                    })
+                    
+                    # Display the response
+                    with st.chat_message("assistant"):
+                        st.write(response_content["text"])
                         
-                    if response_content["dataframe"] is not None:
-                        st.dataframe(response_content["dataframe"])
+                        if response_content["plot"] is not None:
+                            st.plotly_chart(response_content["plot"])
+                            
+                        if response_content["dataframe"] is not None:
+                            st.dataframe(response_content["dataframe"])
 
 elif app_mode == "Analiza z pliku konfiguracyjnego":
     # Show loaded conversation info if available
@@ -1058,7 +1191,13 @@ elif app_mode == "Analiza z pliku konfiguracyjnego":
         file_info = ""
         if "current_file_name" in st.session_state and st.session_state.current_file_name:
             file_info = f" - Plik: {st.session_state.current_file_name}"
-        st.info(f"Wczytana konwersacja: {info['name']} (utworzona {info['date'][:10]}){file_info}")
+        
+        # Show different message based on file load status
+        if info.get("file_loaded", False):
+            st.info(f"Wczytana konwersacja: {info['name']} (utworzona {info['date'][:10]}){file_info}")
+        else:
+            st.warning(f"Wczytana konwersacja: {info['name']} (utworzona {info['date'][:10]}){file_info} - Wymagane ponowne wczytanie pliku danych.")
     
-    # Display configuration-based analysis interface
-    display_config_analysis()
+    # Display configuration-based analysis interface only if conversation is loaded correctly
+    if not st.session_state.get("pending_conversation", False):
+        display_config_analysis()
