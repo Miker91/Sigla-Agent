@@ -590,6 +590,56 @@ if st.session_state.current_file_name != "sample_data":
         st.session_state.langchain_messages = []
     st.session_state.current_file_name = "sample_data"
 
+def detect_delimiter(file_content, sample_size=5000):
+    """
+    Automatycznie wykrywa separator w pliku CSV.
+    Sprawdza najpopularniejsze separatory: przecinek, średnik, tabulator.
+    
+    Args:
+        file_content: Zawartość pliku jako bajty
+        sample_size: Liczba bajtów do analizy
+    
+    Returns:
+        Wykryty separator (str), domyślnie przecinek
+    """
+    import csv
+    
+    # Konwersja bajtów do tekstu
+    sample = file_content[:sample_size].decode('utf-8', errors='replace')
+    
+    # Popularne separatory do sprawdzenia
+    delimiters = [',', ';', '\t', '|']
+    counts = {}
+    
+    # Sprawdź każdy separator
+    for delimiter in delimiters:
+        sample_io = io.StringIO(sample)
+        try:
+            reader = csv.reader(sample_io, delimiter=delimiter)
+            # Pobierz kilka wierszy, aby sprawdzić spójność liczby kolumn
+            rows = list(reader)[:10]  # Sprawdź pierwsze 10 wierszy
+            
+            if not rows:
+                counts[delimiter] = 0
+                continue
+                
+            # Licz wiersze z taką samą liczbą kolumn jak pierwszy wiersz
+            first_row_len = len(rows[0])
+            consistent_rows = sum(1 for row in rows if len(row) == first_row_len)
+            
+            # Weź pod uwagę również liczbę kolumn (więcej kolumn może oznaczać lepszy separator)
+            counts[delimiter] = (consistent_rows * 10) + first_row_len if first_row_len > 1 else 0
+        except Exception:
+            counts[delimiter] = 0
+    
+    # Wybierz separator z najwyższym wynikiem
+    best_delimiter = max(counts.items(), key=lambda x: x[1])[0] if counts else ','
+    
+    # Jeśli wynik jest za słaby, wróć do przecinka
+    if counts.get(best_delimiter, 0) < 10:
+        return ','
+        
+    return best_delimiter
 
 uploaded_file = st.file_uploader(
     "Wgraj plik CSV", type=["csv"], key="file_uploader"
@@ -630,7 +680,45 @@ if uploaded_file is not None:
             st.rerun()
     
     if uploaded_file.name.endswith(".csv"):
-        df = pd.read_csv(uploaded_file)
+        # Wczytaj zawartość pliku
+        file_content = uploaded_file.getvalue()
+        
+        # Wykryj separator
+        auto_delimiter = detect_delimiter(file_content)
+        
+        # Pokaż opcje separatora
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            delimiter_options = {
+                "auto": f"Automatyczny ({auto_delimiter})",
+                ",": "Przecinek (,)",
+                ";": "Średnik (;)",
+                "\t": "Tabulator (\\t)",
+                "|": "Pionowa kreska (|)"
+            }
+            delimiter_choice = st.selectbox(
+                "Separator w pliku CSV:", 
+                list(delimiter_options.keys()),
+                format_func=lambda x: delimiter_options[x],
+                index=0
+            )
+        
+        # Ustal separator do użycia
+        delimiter = auto_delimiter if delimiter_choice == "auto" else delimiter_choice
+        
+        # Wczytaj plik z odpowiednim separatorem
+        try:
+            df = pd.read_csv(io.BytesIO(file_content), sep=delimiter)
+            st.success(f"Plik CSV wczytany pomyślnie z separatorem: {delimiter}")
+        except Exception as e:
+            st.error(f"Błąd podczas wczytywania pliku CSV: {e}")
+            st.info("Spróbuj wybrać inny separator z listy powyżej.")
+            # Fallback - spróbuj z domyślnym separatorem
+            try:
+                df = pd.read_csv(uploaded_file)
+            except:
+                st.error("Nie udało się wczytać pliku. Sprawdź format danych.")
+                st.stop()
     else:
         df = pd.read_excel(uploaded_file)
 
