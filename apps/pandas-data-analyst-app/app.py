@@ -110,15 +110,28 @@ def prepare_for_json(obj):
         return {k: prepare_for_json(v) for k, v in obj.items()}
     elif isinstance(obj, list):
         return [prepare_for_json(item) for item in obj]
-    elif hasattr(obj, 'to_json'):  # Handle Plotly figures
+    elif hasattr(obj, 'to_json') and not isinstance(obj, pd.DataFrame):  # Wykresy Plotly, ale nie DataFrame
         try:
             return {'__plotly_figure__': True, 'data': json.loads(obj.to_json())}
         except:
             return "PLOTLY_FIGURE_CONVERSION_FAILED"
-    elif hasattr(obj, 'to_dict'):  # Handle pandas DataFrames
+    elif isinstance(obj, pd.DataFrame):  # Explicit check for DataFrame
         try:
-            return {'__pandas_dataframe__': True, 'data': obj.to_dict()}
-        except:
+            # Konwertuj DataFrame na format, który można łatwiej serializować
+            result = {
+                '__pandas_dataframe__': True,
+                'data': obj.to_dict(orient='split'),
+                'index': obj.index.tolist(),
+                'columns': obj.columns.tolist()
+            }
+            # Konwertuj NaN i None na łańcuchy znaków dla bezpieczeństwa serializacji
+            for i, row in enumerate(result['data']['data']):
+                for j, val in enumerate(row):
+                    if pd.isna(val):
+                        result['data']['data'][i][j] = None
+            return result
+        except Exception as e:
+            print(f"Error serializing DataFrame: {e}")
             return "PANDAS_DATAFRAME_CONVERSION_FAILED"
     elif pd.isna(obj):  # Handle NaN and None
         return None
@@ -135,21 +148,39 @@ def prepare_for_json(obj):
 def restore_from_json(obj):
     """Restore special objects from JSON representation"""
     if isinstance(obj, dict):
-        # Handle special object types
-        if '__plotly_figure__' in obj:
+        # Najpierw sprawdź, czy to jest specjalny obiekt
+        if '__pandas_dataframe__' in obj:
+            try:
+                if 'data' in obj:
+                    # Bardziej niezawodna metoda przywracania DataFrame
+                    if isinstance(obj['data'], dict) and 'data' in obj['data'] and 'columns' in obj['data']:
+                        # Przywracanie z formatu 'split'
+                        df = pd.DataFrame(
+                            data=obj['data']['data'],
+                            columns=obj['data']['columns'],
+                            index=obj['data'].get('index', None)
+                        )
+                        return df
+                    else:
+                        # Próba użycia standardowej metody jako fallback
+                        return pd.DataFrame.from_dict(obj['data'])
+                else:
+                    return "PANDAS_DATAFRAME_DATA_MISSING"
+            except Exception as e:
+                print(f"Error restoring DataFrame: {e}, data: {obj.get('data', {}).keys() if isinstance(obj.get('data', {}), dict) else 'not a dict'}")
+                return f"PANDAS_DATAFRAME_RESTORATION_FAILED: {str(e)[:100]}"
+        elif '__plotly_figure__' in obj:
             try:
                 import plotly.io as pio
-                return pio.from_json(json.dumps(obj['data']))
-            except:
-                return "PLOTLY_FIGURE_RESTORATION_FAILED"
-        elif '__pandas_dataframe__' in obj:
-            try:
-                return pd.DataFrame.from_dict(obj['data'])
-            except:
-                return "PANDAS_DATAFRAME_RESTORATION_FAILED"
+                if 'data' in obj and obj['data']:
+                    return pio.from_json(json.dumps(obj['data']))
+                else:
+                    return "PLOTLY_FIGURE_DATA_MISSING"
+            except Exception as e:
+                return f"PLOTLY_FIGURE_RESTORATION_FAILED: {str(e)[:100]}"
         elif '__python_object__' in obj:
             # Just return a string representation for custom objects
-            return obj['data']
+            return obj.get('data', "PYTHON_OBJECT_DATA_MISSING")
         else:
             # Regular dictionary
             return {k: restore_from_json(v) for k, v in obj.items()}
@@ -250,10 +281,36 @@ def load_conversation(filepath):
         
         # Restore special objects in conversation data
         if "data_chat_history" in conversation_data:
-            conversation_data["data_chat_history"] = restore_from_json(conversation_data["data_chat_history"])
+            try:
+                conversation_data["data_chat_history"] = restore_from_json(conversation_data["data_chat_history"])
+            except Exception as e:
+                st.warning(f"Błąd podczas przywracania historii czatu: {e}")
+                conversation_data["data_chat_history"] = []
         
         if "unified_chat_history" in conversation_data:
-            conversation_data["unified_chat_history"] = restore_from_json(conversation_data["unified_chat_history"])
+            try:
+                conversation_data["unified_chat_history"] = restore_from_json(conversation_data["unified_chat_history"])
+                
+                # Sanityzacja danych - sprawdź każdą wiadomość
+                for i, msg in enumerate(conversation_data["unified_chat_history"]):
+                    if msg["type"] == "assistant" and "content" in msg:
+                        content = msg["content"]
+                        # Sprawdź obiekty dataframe
+                        if "dataframe" in content and content["dataframe"] is not None:
+                            if isinstance(content["dataframe"], str) and "FAILED" in content["dataframe"]:
+                                # Pozostaw wiadomość o błędzie
+                                pass
+                            elif not isinstance(content["dataframe"], pd.DataFrame):
+                                # Zmień na None, jeśli to nie jest DataFrame ani wiadomość o błędzie
+                                content["dataframe"] = None
+                        elif "plot" in content and content["plot"] is not None:
+                            # Sprawdź czy to nie jest przypadkiem DataFrame mylnie zinterpretowany jako wykres
+                            if isinstance(content["plot"], str) and "Klasyfikacja" in content["plot"]:
+                                # To prawdopodobnie błędnie zdeserialiowany DataFrame
+                                content["plot"] = "PLOTLY_FIGURE_CONVERSION_ERROR_POSSIBLE_DATAFRAME"
+            except Exception as e:
+                st.warning(f"Błąd podczas przywracania ujednoliconej historii: {e}")
+                conversation_data["unified_chat_history"] = []
         
         # Restore conversation state
         st.session_state["app_mode"] = conversation_data.get("app_mode", "Analiza i czatowanie z danymi") 
@@ -328,6 +385,73 @@ def get_saved_conversations():
     # Sort by date (newest first)
     conversations.sort(key=lambda x: x.get("date", ""), reverse=True)
     return conversations
+
+def view_conversation_file(filepath):
+    """Wyświetla surową zawartość pliku konwersacji"""
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            content = f.read()
+        return content
+    except Exception as e:
+        return f"Błąd odczytu pliku: {e}"
+        
+def fix_conversation_file(filepath):
+    """Próbuje naprawić plik konwersacji poprzez usunięcie problematycznych elementów"""
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        # Poprawiamy różne problemy w pliku
+        modified = False
+        
+        # 1. Naprawiamy problemy z unified_chat_history
+        if "unified_chat_history" in data:
+            for msg in data["unified_chat_history"]:
+                if msg["type"] == "assistant" and "content" in msg:
+                    content = msg["content"]
+                    
+                    # Problem 1: Mylne przypisanie DataFrame jako Plotly Figure
+                    if "plot" in content and isinstance(content["plot"], str):
+                        if "Klasyfikacja" in content["plot"] or "PLOTLY_FIGURE_RESTORATION_FAILED" in content["plot"]:
+                            # To prawdopodobnie był DataFrame
+                            content["dataframe"] = {
+                                "__pandas_dataframe__": True,
+                                "data": {"columns": [], "data": [], "index": []}
+                            }
+                            content["plot"] = None
+                            modified = True
+                    
+                    # Problem 2: Uszkodzone DataFrame
+                    if "dataframe" in content:
+                        if isinstance(content["dataframe"], str) and "FAILED" in content["dataframe"]:
+                            content["dataframe"] = None
+                            modified = True
+                        elif not isinstance(content["dataframe"], dict) and not pd.isna(content["dataframe"]):
+                            content["dataframe"] = None
+                            modified = True
+        
+        # 2. Naprawiamy data_chat_history (podobnie)
+        if "data_chat_history" in data:
+            for entry in data["data_chat_history"]:
+                if "assistant" in entry and isinstance(entry["assistant"], dict):
+                    # Usuwamy potencjalnie problematyczne obiekty
+                    if "plot" in entry["assistant"]:
+                        entry["assistant"]["plot"] = None
+                        modified = True
+                    if "dataframe" in entry["assistant"]:
+                        entry["assistant"]["dataframe"] = None
+                        modified = True
+        
+        # Zapisz naprawiony plik
+        if modified:
+            fixed_filepath = filepath.replace(".json", "_fixed.json")
+            with open(fixed_filepath, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            return fixed_filepath
+        else:
+            return "Nie znaleziono problemów do naprawienia w tym pliku."
+    except Exception as e:
+        return f"Błąd naprawy pliku: {e}"
 
 def delete_conversation(filepath):
     """Delete a saved conversation file"""
@@ -491,6 +615,57 @@ else:
 st.sidebar.markdown("---")
 st.sidebar.subheader("Poprzednie konwersacje")
 
+# Pobierz listę zapisanych konwersacji - będzie używana w kilku miejscach
+saved_conversations = get_saved_conversations()
+
+# Developer options (hidden in expander)
+with st.sidebar.expander("Opcje deweloperskie", expanded=False):
+    st.session_state["debug_mode"] = st.checkbox(
+        "Tryb debugowania",
+        value=st.session_state.get("debug_mode", False),
+        help="Pokazuje dodatkowe informacje diagnostyczne"
+    )
+    
+    if st.session_state["debug_mode"]:
+        st.info("Tryb debugowania włączony - wyświetlane będą dodatkowe informacje techniczne.")
+        
+        # Informacje o wersji
+        st.write(f"Wersja Pandas: {pd.__version__}")
+        st.write(f"Wersja Streamlit: {st.__version__}")
+        
+        # Opcje debugowania konwersacji
+        if saved_conversations and len(saved_conversations) > 0:
+            st.subheader("Debugowanie konwersacji")
+            debug_conversation = st.selectbox(
+                "Wybierz konwersację do debugowania",
+                ["Wybierz..."] + [f"{c['name']} ({c['date'][:10]})" for c in saved_conversations]
+            )
+            
+            if debug_conversation != "Wybierz...":
+                debug_index = [f"{c['name']} ({c['date'][:10]})" for c in saved_conversations].index(debug_conversation)
+                debug_filepath = saved_conversations[debug_index]["filepath"]
+                
+                st.write(f"Plik: {debug_filepath}")
+                
+                # Przyciski akcji
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("Pokaż surową zawartość"):
+                        raw_content = view_conversation_file(debug_filepath)
+                        st.code(raw_content, language="json")
+                
+                with col2:
+                    if st.button("Napraw konwersację"):
+                        fixed_filepath = fix_conversation_file(debug_filepath)
+                        if fixed_filepath.startswith("Błąd"):
+                            st.error(fixed_filepath)
+                        else:
+                            st.success(f"Naprawiony plik zapisany jako: {fixed_filepath}")
+        
+        # Informacje o sesji
+        if st.button("Pokaż dane sesji"):
+            st.json({k: str(type(v)) for k, v in st.session_state.items()})
+
 # Add button to clear current conversation
 if "loaded_conversation_info" in st.session_state:
     if st.sidebar.button("Rozpocznij nową konwersację"):
@@ -514,7 +689,7 @@ with st.sidebar.expander("Zapisz bieżącą konwersację"):
             st.success(f"Konwersacja zapisana: {conversation_name}")
 
 # Load previous conversations
-saved_conversations = get_saved_conversations()
+# Używamy już pobranej listy konwersacji
 if saved_conversations:
     conversation_names = ["Wybierz konwersację..."] + [f"{c['name']} ({c['date'][:10]})" for c in saved_conversations]
     selected_conversation = st.sidebar.selectbox("Wczytaj poprzednią konwersację", conversation_names)
@@ -1099,11 +1274,64 @@ if app_mode == "Analiza i czatowanie z danymi":
                     
                     # Display any plot if available
                     if "plot" in msg["content"] and msg["content"]["plot"] is not None:
-                        st.plotly_chart(msg["content"]["plot"])
+                        # Sprawdź, czy to jest obiekt wykresu czy string z błędem
+                        if isinstance(msg["content"]["plot"], str) and "FAILED" in msg["content"]["plot"]:
+                            st.warning(f"Nie udało się odtworzyć wykresu z zapisanej konwersacji: {msg['content']['plot']}")
+                            
+                            # Jeśli to wygląda jak DataFrame, pokaż dodatkowe informacje
+                            if "POSSIBLE_DATAFRAME" in msg["content"]["plot"]:
+                                st.info("Ten obiekt mógł być oryginalnie tabelą (DataFrame), a nie wykresem.")
+                                
+                        elif isinstance(msg["content"]["plot"], str):
+                            st.warning(f"Nie udało się odtworzyć wykresu: {msg['content']['plot']}")
+                        else:
+                            try:
+                                st.plotly_chart(msg["content"]["plot"])
+                            except Exception as e:
+                                st.warning(f"Błąd podczas wyświetlania wykresu: {e}")
+                                if st.session_state.get("debug_mode", False):
+                                    st.write(f"Typ obiektu: {type(msg['content']['plot']).__name__}")
+                                    st.write(f"Reprezentacja: {str(msg['content']['plot'])[:200]}")
+                                    
+                                    # Jeśli to dict, pokaż klucze
+                                    if isinstance(msg["content"]["plot"], dict):
+                                        st.write(f"Klucze: {list(msg['content']['plot'].keys())}")
+                                    elif hasattr(msg["content"]["plot"], 'to_dict'):
+                                        st.write("Obiekt ma metodę to_dict")
+                                        try:
+                                            st.write(f"Klucze po to_dict: {list(msg['content']['plot'].to_dict().keys())}")
+                                        except:
+                                            st.write("Nie udało się wywołać to_dict()")
                     
                     # Display any dataframe if available
                     if "dataframe" in msg["content"] and msg["content"]["dataframe"] is not None:
-                        st.dataframe(msg["content"]["dataframe"])
+                        # Sprawdź, czy to jest obiekt DataFrame czy string z błędem
+                        if isinstance(msg["content"]["dataframe"], str) and "FAILED" in msg["content"]["dataframe"]:
+                            st.warning(f"Nie udało się odtworzyć tabeli z zapisanej konwersacji: {msg['content']['dataframe']}")
+                            
+                            # Wypisz więcej informacji debugujących, jeśli jesteśmy w trybie debugowania
+                            if st.session_state.get("debug_mode", False):
+                                st.write("Dane debugowania:")
+                                if isinstance(msg["content"], dict):
+                                    st.write(f"Typy kluczy w content: {', '.join([f'{k}: {type(v).__name__}' for k, v in msg['content'].items()])}")
+                                st.write(f"Typ dataframe: {type(msg['content'].get('dataframe', 'MISSING'))}")
+                        elif isinstance(msg["content"]["dataframe"], pd.DataFrame):
+                            try:
+                                # Standardowy sposób wyświetlania
+                                st.dataframe(msg["content"]["dataframe"])
+                            except Exception as e:
+                                st.warning(f"Błąd podczas wyświetlania tabeli: {e}")
+                                # Próba awaryjnego wyświetlenia
+                                try:
+                                    st.write("Próba alternatywnego wyświetlenia tabeli:")
+                                    html = msg["content"]["dataframe"].to_html(max_rows=50)
+                                    st.markdown(html, unsafe_allow_html=True)
+                                except Exception as e2:
+                                    st.error(f"Również alternatywne wyświetlenie nie powiodło się: {e2}")
+                        else:
+                            st.warning(f"Tabela danych w nieprawidłowym formacie (typ: {type(msg['content']['dataframe']).__name__}).")
+                            if st.session_state.get("debug_mode", False):
+                                st.write(f"Zawartość: {str(msg['content']['dataframe'])[:200]}")
                         
                     # Display follow-up suggestions if available
                     if "followups" in msg["content"] and msg["content"]["followups"]:
