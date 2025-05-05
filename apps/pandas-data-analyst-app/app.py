@@ -316,6 +316,11 @@ def load_conversation(filepath):
         st.session_state["app_mode"] = conversation_data.get("app_mode", "Analiza i czatowanie z danymi") 
         st.session_state["data_chat_history"] = conversation_data.get("data_chat_history", [])
         st.session_state["unified_chat_history"] = conversation_data.get("unified_chat_history", [])
+        
+        # Usuń zmienną debug_mode, jeśli istnieje
+        if "debug_mode" in st.session_state:
+            st.session_state.pop("debug_mode", None)
+            
         st.session_state["loaded_conversation_info"] = {
             "name": conversation_data.get("name", "Wczytana konwersacja"),
             "date": conversation_data.get("date", ""),
@@ -385,73 +390,6 @@ def get_saved_conversations():
     # Sort by date (newest first)
     conversations.sort(key=lambda x: x.get("date", ""), reverse=True)
     return conversations
-
-def view_conversation_file(filepath):
-    """Wyświetla surową zawartość pliku konwersacji"""
-    try:
-        with open(filepath, 'r', encoding='utf-8') as f:
-            content = f.read()
-        return content
-    except Exception as e:
-        return f"Błąd odczytu pliku: {e}"
-        
-def fix_conversation_file(filepath):
-    """Próbuje naprawić plik konwersacji poprzez usunięcie problematycznych elementów"""
-    try:
-        with open(filepath, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        
-        # Poprawiamy różne problemy w pliku
-        modified = False
-        
-        # 1. Naprawiamy problemy z unified_chat_history
-        if "unified_chat_history" in data:
-            for msg in data["unified_chat_history"]:
-                if msg["type"] == "assistant" and "content" in msg:
-                    content = msg["content"]
-                    
-                    # Problem 1: Mylne przypisanie DataFrame jako Plotly Figure
-                    if "plot" in content and isinstance(content["plot"], str):
-                        if "Klasyfikacja" in content["plot"] or "PLOTLY_FIGURE_RESTORATION_FAILED" in content["plot"]:
-                            # To prawdopodobnie był DataFrame
-                            content["dataframe"] = {
-                                "__pandas_dataframe__": True,
-                                "data": {"columns": [], "data": [], "index": []}
-                            }
-                            content["plot"] = None
-                            modified = True
-                    
-                    # Problem 2: Uszkodzone DataFrame
-                    if "dataframe" in content:
-                        if isinstance(content["dataframe"], str) and "FAILED" in content["dataframe"]:
-                            content["dataframe"] = None
-                            modified = True
-                        elif not isinstance(content["dataframe"], dict) and not pd.isna(content["dataframe"]):
-                            content["dataframe"] = None
-                            modified = True
-        
-        # 2. Naprawiamy data_chat_history (podobnie)
-        if "data_chat_history" in data:
-            for entry in data["data_chat_history"]:
-                if "assistant" in entry and isinstance(entry["assistant"], dict):
-                    # Usuwamy potencjalnie problematyczne obiekty
-                    if "plot" in entry["assistant"]:
-                        entry["assistant"]["plot"] = None
-                        modified = True
-                    if "dataframe" in entry["assistant"]:
-                        entry["assistant"]["dataframe"] = None
-                        modified = True
-        
-        # Zapisz naprawiony plik
-        if modified:
-            fixed_filepath = filepath.replace(".json", "_fixed.json")
-            with open(fixed_filepath, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            return fixed_filepath
-        else:
-            return "Nie znaleziono problemów do naprawienia w tym pliku."
-    except Exception as e:
-        return f"Błąd naprawy pliku: {e}"
 
 def delete_conversation(filepath):
     """Delete a saved conversation file"""
@@ -617,54 +555,6 @@ st.sidebar.subheader("Poprzednie konwersacje")
 
 # Pobierz listę zapisanych konwersacji - będzie używana w kilku miejscach
 saved_conversations = get_saved_conversations()
-
-# Developer options (hidden in expander)
-with st.sidebar.expander("Opcje deweloperskie", expanded=False):
-    st.session_state["debug_mode"] = st.checkbox(
-        "Tryb debugowania",
-        value=st.session_state.get("debug_mode", False),
-        help="Pokazuje dodatkowe informacje diagnostyczne"
-    )
-    
-    if st.session_state["debug_mode"]:
-        st.info("Tryb debugowania włączony - wyświetlane będą dodatkowe informacje techniczne.")
-        
-        # Informacje o wersji
-        st.write(f"Wersja Pandas: {pd.__version__}")
-        st.write(f"Wersja Streamlit: {st.__version__}")
-        
-        # Opcje debugowania konwersacji
-        if saved_conversations and len(saved_conversations) > 0:
-            st.subheader("Debugowanie konwersacji")
-            debug_conversation = st.selectbox(
-                "Wybierz konwersację do debugowania",
-                ["Wybierz..."] + [f"{c['name']} ({c['date'][:10]})" for c in saved_conversations]
-            )
-            
-            if debug_conversation != "Wybierz...":
-                debug_index = [f"{c['name']} ({c['date'][:10]})" for c in saved_conversations].index(debug_conversation)
-                debug_filepath = saved_conversations[debug_index]["filepath"]
-                
-                st.write(f"Plik: {debug_filepath}")
-                
-                # Przyciski akcji
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.button("Pokaż surową zawartość"):
-                        raw_content = view_conversation_file(debug_filepath)
-                        st.code(raw_content, language="json")
-                
-                with col2:
-                    if st.button("Napraw konwersację"):
-                        fixed_filepath = fix_conversation_file(debug_filepath)
-                        if fixed_filepath.startswith("Błąd"):
-                            st.error(fixed_filepath)
-                        else:
-                            st.success(f"Naprawiony plik zapisany jako: {fixed_filepath}")
-        
-        # Informacje o sesji
-        if st.button("Pokaż dane sesji"):
-            st.json({k: str(type(v)) for k, v in st.session_state.items()})
 
 # Add button to clear current conversation
 if "loaded_conversation_info" in st.session_state:
@@ -1289,32 +1179,12 @@ if app_mode == "Analiza i czatowanie z danymi":
                                 st.plotly_chart(msg["content"]["plot"])
                             except Exception as e:
                                 st.warning(f"Błąd podczas wyświetlania wykresu: {e}")
-                                if st.session_state.get("debug_mode", False):
-                                    st.write(f"Typ obiektu: {type(msg['content']['plot']).__name__}")
-                                    st.write(f"Reprezentacja: {str(msg['content']['plot'])[:200]}")
-                                    
-                                    # Jeśli to dict, pokaż klucze
-                                    if isinstance(msg["content"]["plot"], dict):
-                                        st.write(f"Klucze: {list(msg['content']['plot'].keys())}")
-                                    elif hasattr(msg["content"]["plot"], 'to_dict'):
-                                        st.write("Obiekt ma metodę to_dict")
-                                        try:
-                                            st.write(f"Klucze po to_dict: {list(msg['content']['plot'].to_dict().keys())}")
-                                        except:
-                                            st.write("Nie udało się wywołać to_dict()")
                     
                     # Display any dataframe if available
                     if "dataframe" in msg["content"] and msg["content"]["dataframe"] is not None:
                         # Sprawdź, czy to jest obiekt DataFrame czy string z błędem
                         if isinstance(msg["content"]["dataframe"], str) and "FAILED" in msg["content"]["dataframe"]:
                             st.warning(f"Nie udało się odtworzyć tabeli z zapisanej konwersacji: {msg['content']['dataframe']}")
-                            
-                            # Wypisz więcej informacji debugujących, jeśli jesteśmy w trybie debugowania
-                            if st.session_state.get("debug_mode", False):
-                                st.write("Dane debugowania:")
-                                if isinstance(msg["content"], dict):
-                                    st.write(f"Typy kluczy w content: {', '.join([f'{k}: {type(v).__name__}' for k, v in msg['content'].items()])}")
-                                st.write(f"Typ dataframe: {type(msg['content'].get('dataframe', 'MISSING'))}")
                         elif isinstance(msg["content"]["dataframe"], pd.DataFrame):
                             try:
                                 # Standardowy sposób wyświetlania
@@ -1330,9 +1200,7 @@ if app_mode == "Analiza i czatowanie z danymi":
                                     st.error(f"Również alternatywne wyświetlenie nie powiodło się: {e2}")
                         else:
                             st.warning(f"Tabela danych w nieprawidłowym formacie (typ: {type(msg['content']['dataframe']).__name__}).")
-                            if st.session_state.get("debug_mode", False):
-                                st.write(f"Zawartość: {str(msg['content']['dataframe'])[:200]}")
-                        
+                    
                     # Display follow-up suggestions if available
                     if "followups" in msg["content"] and msg["content"]["followups"]:
                         followups = msg["content"]["followups"]
