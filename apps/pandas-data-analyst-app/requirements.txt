@@ -9,3 +9,4 @@ langgraph
 openai
 pyyaml
 ydata-profiling
+IPython
